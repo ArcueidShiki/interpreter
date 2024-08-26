@@ -2,6 +2,18 @@
 
 [CITS2002 Project1 Programming Language Interpreter](https://teaching.csse.uwa.edu.au/units/CITS2002/projects/project1.php)
 
+## Environment
+
+Linux / Unix C, gcc
+
+## Build
+
+Makefile or CMakeList
+
+## Test
+
+see projects exmaples.
+
 ## Workflow
 
 ```bash
