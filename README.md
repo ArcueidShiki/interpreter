@@ -18,7 +18,7 @@ see projects exmaples.
 
 ```bash
 # download code repository
-1. git clone https://github.com/ArcueidShiki/SmartEntrySystem.git
+1. git clone https://github.com/ArcueidShiki/interpreter.git
 
 # select a branch for development
 2. git checkout dev
