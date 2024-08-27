@@ -4,15 +4,36 @@
 
 ## Environment
 
-Linux / Unix C, gcc
+Linux / Unix
 
 ## Build
 
-Makefile or CMakeList
+```bash
+# under root directory of this project run:
+make all # (or) make debug (or) make release (make test)
+
+# It will build executable under /out/ directory
+make clean # remove all the outpur under /out/
+```
 
 ## Test
 
-see projects exmaples.
+```bash
+# under root directory of this project run:
+make test
+cd out
+./test
+./runml_debug
+./runml_release
+```
+
+See test cases on project page.
+Using automatic testing, assert.
+
+## Submission
+
+only a single `runml.c` files.
+Other files will not be submitted.
 
 ## Workflow
 
