@@ -1,7 +1,7 @@
 /**
  * CITS2002 Project 1 2024
  * Student1:    24323312    Jingtong Peng
- * Student2:    [your student number] [your name]
+ * Student2:    24364937    Lingyu Chen
  * Platform:    Linux (or MacOs)
  */
 #include <string.h>
@@ -13,5 +13,6 @@
 int main(int argc, char **argv)
 {
     printf("Hello, World!\n");
-    return 0;
+    printf("this can work!\n");
 }
+
