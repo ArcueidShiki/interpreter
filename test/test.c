@@ -8,10 +8,20 @@
 #include <unistd.h>
 #include <string.h>
 
-int main(void)
-{
-    printf("This is Test:\n");
+#define MAX_TESTCASES 8
+const char *testcases[] = {
+    "../test/sample01.ml",
+    "../test/sample02.ml",
+    "../test/sample03.ml",
+    "../test/sample04.ml",
+    "../test/sample05.ml",
+    "../test/sample06.ml",
+    "../test/sample07.ml",
+    "../test/sample08.ml",
+};
 
+int test()
+{
     // current working directory
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) != NULL)
@@ -21,9 +31,27 @@ int main(void)
     else
     {
         perror("getcwd() error");
-        return 1;
+        exit(EXIT_FAILURE);
     }
-    strcpy(cwd + strlen(cwd), "/runml_release");
-    assert(system(cwd) == 0);
+    char *arg0 = "./runml_debug ";
+    for (int i = 0; i < MAX_TESTCASES; i++)
+    {
+        const char *arg1 = testcases[i];
+        printf("Test case: %s\n", arg1);
+        printf("Test case: %s\n", testcases[i]);
+        printf("Test case: %p\n", testcases[i]);
+        char command[1024];
+        memset(command, 0, sizeof(command));
+        strncat(command, arg0, strlen(arg0));
+        strncat(command, arg1, strlen(arg1));
+        assert(system(command) == 0);
+    }
+    printf("All test cases passed\n");
     return 0;
+}
+
+int main(void)
+{
+    test();
+    return EXIT_SUCCESS;
 }

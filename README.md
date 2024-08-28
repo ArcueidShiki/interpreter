@@ -20,11 +20,11 @@ make clean # remove all the outpur under /out/
 
 ```bash
 # under root directory of this project run:
-make test
+make all
 cd out
 ./test
-./runml_debug
-./runml_release
+./runml_debug ../test/filename
+./runml_release ../test/filename
 ```
 
 See test cases on project page.
