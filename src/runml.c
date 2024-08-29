@@ -11,11 +11,14 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#define DEBUG_START "[DEBUG]: {"
+#define DEBUG_END "}\n"
 #ifdef DEBUG_MODE
 #define LOGD(fmt, ...)                      \
     if (DEBUG_MODE)                         \
     {                                       \
-        fprintf(stdout, fmt, ##__VA_ARGS__); \
+        fprintf(stdout, DEBUG_START fmt DEBUG_END, ##__VA_ARGS__); \
     }
 #else
 #define LOGD(fmt, ...)
@@ -67,7 +70,7 @@ int main(int argc, char **argv)
     check_args(argc, argv);
     int fd = check_file(argv[1]);
     close(fd);
-    LOGD("This is a debug message\n");
-    printf("Hello, World!\n");
-    printf("this can work!\n");
+    LOGD("This is a debug message");
+    LOGD("This is a debug message %d", 1);
+    LOGD("This is a debug message %s", "test");
 }
