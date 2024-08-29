@@ -1,7 +1,7 @@
 # Build file, won't be submitted.
 
 CC := cc
-CFLAGS_DEBUG := -Wall -Wextra -g -std=c11 -fsanitize=address -fsanitize=undefined -O3 -fstrict-aliasing
+CFLAGS_DEBUG := -DDEBUG_MODE -Wall -Wextra -g -std=c11 -fsanitize=address -fsanitize=undefined -O3 -fstrict-aliasing
 CFLAGS_RELEASE := -Wall -Wextra -std=c11 -O3 -fstrict-aliasing
 SRC_DIR := src
 INC_DIR := include
