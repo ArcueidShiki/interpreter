@@ -11,23 +11,34 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-typedef struct {
-/* This struct should read the .ml file; recognize valid statements, identifiers, function, etc. report errors */
+#ifdef DEBUG_MODE
+#define LOGD(fmt, ...)                      \
+    if (DEBUG_MODE)                         \
+    {                                       \
+        fprintf(stdout, fmt, ##__VA_ARGS__); \
+    }
+#else
+#define LOGD(fmt, ...)
+#endif
+typedef struct
+{
+    /* This struct should read the .ml file; recognize valid statements, identifiers, function, etc. report errors */
 } Parser;
 
-typedef struct {
-/* This struct should converts validated code into c11 code. and write it to .c file*/
+typedef struct
+{
+    /* This struct should converts validated code into c11 code. and write it to .c file*/
 } Translator;
 
-typedef struct {
-/* This struct should compile to c11 code and execute it*/
+typedef struct
+{
+    /* This struct should compile to c11 code and execute it*/
 } Executor;
 
-typedef struct {
-/* This struct should remove any temporary files and close all opened file descriptors.*/
+typedef struct
+{
+    /* This struct should remove any temporary files and close all opened file descriptors.*/
 } Cleaner;
-
 
 int check_args(int argc, char **arv)
 {
@@ -56,7 +67,7 @@ int main(int argc, char **argv)
     check_args(argc, argv);
     int fd = check_file(argv[1]);
     close(fd);
+    LOGD("This is a debug message\n");
     printf("Hello, World!\n");
     printf("this can work!\n");
 }
-
