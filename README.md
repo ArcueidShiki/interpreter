@@ -92,16 +92,16 @@ Other files will not be submitted.
  *
  * Requirements:
  *
- * 0. Statements are written one per line without a terminating semicolon.
- * 1. All syntax errors detected in invalid ml programs must be reported via stderr on a line commencing with the '!' character. Your runml program must be able to detect all invalid ml programs - EXCEPT that your program will not be tested with any invalid expressions, so you do not need to validate the syntax of expressions.
- * 2. The only 'true' output produced by your translated and compiled program (when running) is the result of executing ml's print statement. Any 'debug' printing should appear on a line commencing with the '@' character.
- * 3. When printed, numbers that are exact integers must be printed without any decimal places; other numbers must be printed with exactly 6 decimal places.
+ * 0. ✔️Statements are written one per line without a terminating semicolon (Done: have_end_semicolon).
+ * 1. ✔️All syntax errors detected in invalid ml programs must be reported via stderr on a line commencing with the '!' character. Your runml program must be able to detect all invalid ml programs - EXCEPT that your program will not be tested with any invalid expressions, so you do not need to validate the syntax of expressions(Done: LOGE).
+ * 2. ✔️The only 'true' output produced by your translated and compiled program (when running) is the result of executing ml's print statement. Any 'debug' printing should appear on a line commencing with the '@' character(Done: LOGD).
+ * 3. When printed, numbers that are exact integers must be printed without any decimal places; other numbers must be printed with exactly 6 decimal places (Done: is_integer).
  * 4. Only one datatype is supported: real numbers (e.g., 2.71828).
- * 5. Identifiers (variable and function names) consist of 1 to 12 lowercase alphabetic characters. (Check Condition)
+ * 5. ✔️Identifiers (variable and function names) consist of 1 to 12 lowercase alphabetic characters. (Check Condition)
  * 6. A maximum of 50 unique identifiers can appear in any program.
  * 7. Variables arg0, arg1,... argN etc., provide access to command-line arguments.
  * 8. Functions must be defined before they are called.
- * 9. Statements within a function must be indented with a tab.
- * 10. Functions have local scope for their parameters and identifiers.
+ * 9. ✔️Statements within a function must be indented with a tab(Done: startwith_tab).
+ * 10. ✔️Functions have local scope for their parameters and identifiers(Done: using Function struct only access parameters and identifiers of itself).
  * 11. Programs execute statements sequentially from top to bottom, with function calls being the only form of control flow.
 ```
