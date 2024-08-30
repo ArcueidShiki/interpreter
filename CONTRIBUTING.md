@@ -5,7 +5,7 @@
 1. git clone https://github.com/ArcueidShiki/interpreter.git
 
 # select a branch for development
-2. git checkout dev
+2. git checkout [branch_name]
    or # solving current issue branch
    git checkout -b [issue_branch_name] [issue_branch_name]
 

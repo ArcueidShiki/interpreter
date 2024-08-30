@@ -166,7 +166,7 @@ bool is_valid_function(Function *f)
     return true;
 }
 
-bool have_end_semicolon(char *line)
+bool endwith_semicolon(char *line)
 {
     bool have = line[strlen(line) - 1] == ';';
     if (have)
@@ -179,7 +179,7 @@ bool have_end_semicolon(char *line)
 
 bool is_valid_line(char *line)
 {
-    if (have_end_semicolon(line))
+    if (endwith_semicolon(line))
     {
         return false;
     }
