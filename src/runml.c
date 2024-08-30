@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <math.h>
 
 #ifdef DEBUG_MODE
 #define DEBUG_START "@[DEBUG]: {"
@@ -29,7 +30,48 @@
 #define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
 #define IDENTIFIER_LENGTH 12
-uint16_t cur_ml_file_line = 0;
+
+// ======================== Write to C code file Start ========================
+bool is_intd(double num)
+{
+    return floor(num) == num;
+}
+
+bool is_intf(float num)
+{
+    return floor(num) == num;
+}
+
+// tested
+#define ISINT(expr) _Generic((expr), \
+    short: true,                     \
+    int: true,                       \
+    long: true,                      \
+    long long: true,                 \
+    float: is_intf(expr),            \
+    double: is_intd(expr))
+
+#define FMT(expr) _Generic((expr), \
+    short: "%hd\n",                \
+    int: "%d\n",                   \
+    long: "%ld\n",                 \
+    long long: "%lld\n",           \
+    float: "%f\n",                 \
+    double: "%f\n")
+
+#define PRINT(expr)                        \
+    if (ISINT(expr))                       \
+    {                                      \
+        long long res = (long long)(expr); \
+        printf(FMT(res), res);             \
+    }                                      \
+    else                                   \
+    {                                      \
+        printf(FMT(expr), (expr));         \
+    }
+// ======================== Write to C code file End ========================
+
+uint16_t cur_ml_file_row = 0;
 uint16_t cur_ml_file_col = 0;
 char *g_indentifiers[MAX_UNIQUE_IDENTIFIER];
 typedef struct
@@ -103,13 +145,6 @@ int check_file(char *filepath)
     }
     LOGD("File %s opened successful, fd: %d", filepath, fd);
     return fd;
-}
-
-bool is_integer(char *expression)
-{
-    // For requirement 4.
-    (void)expression; // disable warning
-    return false;
 }
 
 bool is_valid_indentifier(char *identifier)
@@ -200,4 +235,13 @@ int main(int argc, char **argv)
     LOGD("Start with tab: %d", startwith_tab(f.statements[0]));
     LOGD("Start with tab; %d", startwith_tab(f.statements[1]));
     LOGD("Start with tab; %d", startwith_tab(f.statements[2]));
+    (void)f;
+    LOGD("5.0 == 5 ? %d", 5.0 == 5);
+    PRINT(5.0);
+    PRINT(5.5);
+    PRINT(5);
+    PRINT(5.0 + 5.5);
+    PRINT(5.0 + 5.0);
+    PRINT(5.0 + 5);
+    PRINT(5.0 + 5.0);
 }
