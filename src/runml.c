@@ -179,35 +179,6 @@ bool is_valid_indentifier(char *identifier)
     return true;
 }
 
-bool is_function_defined(char *function_name)
-{
-    // TODO Lookup in global function symbol table from top-down.
-    (void)function_name; // disable warning
-    return false;
-}
-
-bool is_valid_function(Function *f)
-{
-    if (!is_valid_indentifier(f->funcname))
-    {
-        return false;
-    }
-    if (!is_function_defined(f->funcname))
-    {
-        return false;
-    }
-    for (int i = 0; i < f->num_of_statement; i++)
-    {
-        if (!startwith_tab(f->statements[i]))
-        {
-            LOGE("Function %s statements not start with '\\t'", f->funcname);
-            return false;
-        }
-    }
-    // TODO
-    return true;
-}
-
 bool startwith_tab(char *line)
 {
     int n = strlen(line);
@@ -255,6 +226,88 @@ void rm_comment(char *line)
         LOGD("# found at %ld", pos - line);
         line[pos - line] = '\0';
     }
+}
+
+/**
+ * check if token is a command line argument.
+ * if it is, set the value to N.
+ */
+bool is_cmdline_arg(char *token, long *N)
+{
+    int n = strlen(token);
+    if (n < 4)
+    {
+        return false;
+    }
+    if (strncmp(token, "arg", 3) != 0)
+    {
+        return false;
+    }
+    char *badchar;
+    *N = strtol(token + 3, &badchar, 10);
+    if (*badchar != '\0')
+    {
+        LOGD("%s is not a valid number, %c", token, *badchar);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * handle arg0, arg1 ... argN
+ *      -> argv[0]      "runml"
+ * arg0 -> argv[1]      "program.ml"
+ * arg1 -> argv[2]      "number1"
+ * arg2 -> argv[3]      "number2"
+ * argN -> argv[N + 1]  "numberN"
+ * from arg1 should check if it is a valid number.
+ * @return translated command line argument.
+ * @param token: is a vali string end with '\0'
+ */
+char *translate_cmdline_arg(int argc, char **argv, char *token)
+{
+    long N;
+    if (!is_cmdline_arg(token, &N))
+    {
+        // do nothing.
+        return token;
+    }
+    // out of boundary e.g. argc = 3, but arg2 is appear in code. this is an error.
+    if (N + 1 > argc - 1)
+    {
+        LOGE("arg%ld is out of boundary", N);
+        return token;
+    }
+    return argv[N + 1];
+}
+
+bool is_function_defined(char *function_name)
+{
+    // TODO Lookup in global function symbol table from top-down.
+    (void)function_name; // disable warning
+    return false;
+}
+
+bool is_valid_function(Function *f)
+{
+    if (!is_valid_indentifier(f->funcname))
+    {
+        return false;
+    }
+    if (!is_function_defined(f->funcname))
+    {
+        return false;
+    }
+    for (int i = 0; i < f->num_of_statement; i++)
+    {
+        if (!startwith_tab(f->statements[i]))
+        {
+            LOGE("Function %s statements not start with '\\t'", f->funcname);
+            return false;
+        }
+    }
+    // TODO
+    return true;
 }
 
 int main(int argc, char **argv)

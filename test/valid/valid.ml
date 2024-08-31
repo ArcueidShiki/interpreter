@@ -50,4 +50,5 @@ print increment(3) + increment(4)
 # -------------------------------------------------
 function add a b
     return a * b
+print add(a, b) + arg0 - arg1
 # -------------------------------------------------
