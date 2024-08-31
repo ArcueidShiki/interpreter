@@ -3,6 +3,7 @@
  * Student1:    24323312    Jingtong Peng
  * Student2:    24364937    Lingyu Chen
  * Platform:    Linux (or MacOs)
+ * Dev:         https://github.com/ArcueidShiki/interpreter
  */
 #include <string.h>
 #include <stdlib.h>
@@ -29,7 +30,12 @@
 #define ERROR_END "}\n"
 #define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
-#define IDENTIFIER_LENGTH 12
+#define MAX_IDENTIFIER_LENGTH 12
+
+uint16_t cur_ml_file_row = 0;
+uint16_t cur_ml_file_col = 0;
+char *g_indentifiers[MAX_UNIQUE_IDENTIFIER];
+int g_identifiers_count = 0;
 
 // ======================== Write to C code file Start ========================
 bool is_intd(double num)
@@ -71,9 +77,6 @@ bool is_intf(float num)
     }
 // ======================== Write to C code file End ========================
 
-uint16_t cur_ml_file_row = 0;
-uint16_t cur_ml_file_col = 0;
-char *g_indentifiers[MAX_UNIQUE_IDENTIFIER];
 typedef struct
 {
     void (*report_error)();
@@ -107,10 +110,10 @@ typedef struct
     /* Remove tmp files */
 } Cleaner;
 
-typedef struct Identifier
+typedef struct Variable
 {
-    char *name;
-} Identifier;
+    /* Don't need to be defined, but need to be declared.*/
+} Variable;
 typedef struct Statement
 {
     char *expression;
@@ -121,15 +124,19 @@ typedef struct
     char *funcname;
     int num_of_statement;
     char **statements;
-    Identifier *identifiers;
-    Identifier *parameters;
+    Variable *variables;
+    Variable *parameters;
 } Function;
+
+typedef struct
+{
+} FileHandler;
 
 int check_args(int argc, char **arv)
 {
     if (argc != 2)
     {
-        fprintf(stderr, "Usage: %s <filepath>\n", arv[0]);
+        LOGE("Usage: %s <filepath>\n", arv[0]);
         exit(EXIT_FAILURE);
     }
     return 0;
@@ -137,10 +144,15 @@ int check_args(int argc, char **arv)
 
 int check_file(char *filepath)
 {
+    int n = strlen(filepath);
+    if (n < 4 || strcmp(filepath + n - 3, ".ml") != 0)
+    {
+        LOGE("File %s is not a valid .ml file", filepath);
+    }
     int fd = open(filepath, O_RDONLY);
     if (fd == -1)
     {
-        fprintf(stderr, "Cannot open %s, fd: %d\n", filepath, fd);
+        LOGE("Cannot open %s, fd: %d\n", filepath, fd);
         exit(EXIT_FAILURE);
     }
     LOGD("File %s opened successful, fd: %d", filepath, fd);
@@ -150,7 +162,7 @@ int check_file(char *filepath)
 bool is_valid_indentifier(char *identifier)
 {
     int n = strlen(identifier);
-    if (n > IDENTIFIER_LENGTH)
+    if (n > MAX_IDENTIFIER_LENGTH)
     {
         LOGE("Identifier %s is too long should be 1 to 12", identifier);
         return false;
@@ -172,11 +184,6 @@ bool is_function_defined(char *function_name)
     // TODO Lookup in global function symbol table from top-down.
     (void)function_name; // disable warning
     return false;
-}
-
-bool startwith_tab(char *line)
-{
-    return line[0] == '\t';
 }
 
 bool is_valid_function(Function *f)
@@ -201,15 +208,30 @@ bool is_valid_function(Function *f)
     return true;
 }
 
+bool startwith_tab(char *line)
+{
+    int n = strlen(line);
+    if (n >= 1)
+    {
+        return line[0] == '\t';
+    }
+    return false;
+}
+
 bool endwith_semicolon(char *line)
 {
-    bool have = line[strlen(line) - 1] == ';';
-    if (have)
+    int n = strlen(line);
+    if (n == 0)
+    {
+        return false;
+    }
+    if (line[n - 1] == ';')
     {
         // TODO get ml file line and col
         LOGE("Line: %s is not valid with a terminating semicolon", line);
+        return true;
     }
-    return have;
+    return false;
 }
 
 bool is_valid_line(char *line)
@@ -219,6 +241,20 @@ bool is_valid_line(char *line)
         return false;
     }
     return true;
+}
+
+/**
+ * rm comment first, then process each line.
+ */
+void rm_comment(char *line)
+{
+    char comment = '#';
+    char *pos = strchr(line, comment);
+    if (pos != NULL)
+    {
+        LOGD("# found at %ld", pos - line);
+        line[pos - line] = '\0';
+    }
 }
 
 int main(int argc, char **argv)
@@ -235,6 +271,9 @@ int main(int argc, char **argv)
     LOGD("Start with tab: %d", startwith_tab(f.statements[0]));
     LOGD("Start with tab; %d", startwith_tab(f.statements[1]));
     LOGD("Start with tab; %d", startwith_tab(f.statements[2]));
+    LOGD("Start with tab; %d", startwith_tab(""));
+    LOGD("Start with tab; %d", startwith_tab("\n"));
+    LOGD("Start with tab; %d", startwith_tab("\t\t"));
     (void)f;
     LOGD("5.0 == 5 ? %d", 5.0 == 5);
     PRINT(5.0);
