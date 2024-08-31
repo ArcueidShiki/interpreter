@@ -13,15 +13,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <ctype.h>
-#include <math.h>
 
 #ifdef DEBUG_MODE
-#define DEBUG_START "@[DEBUG]: {"
+#define DEBUG_START "@[DEBUG:line:%d]: {"
 #define DEBUG_END "}\n"
-#define LOGD(fmt, ...)                                             \
-    if (DEBUG_MODE)                                                \
-    {                                                              \
-        fprintf(stdout, DEBUG_START fmt DEBUG_END, ##__VA_ARGS__); \
+#define LOGD(fmt, ...)                                                       \
+    if (DEBUG_MODE)                                                          \
+    {                                                                        \
+        fprintf(stdout, DEBUG_START fmt DEBUG_END, __LINE__, ##__VA_ARGS__); \
     }
 #else
 #define LOGD(fmt, ...)
@@ -31,21 +30,28 @@
 #define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
 #define MAX_IDENTIFIER_LENGTH 12
+#define OUTPUT_FILE "out.c"
+#define OUTPUT_EXECTUABLE "./out"
 
 uint16_t cur_ml_file_row = 0;
 uint16_t cur_ml_file_col = 0;
 char *g_indentifiers[MAX_UNIQUE_IDENTIFIER];
 int g_identifiers_count = 0;
+FILE *ml_fp;
+FILE *outc_fp;
+int g_argc;
+char **g_argv;
 
+#define BLOCK_START 45
 // ======================== Write to C code file Start ========================
 bool is_intd(double num)
 {
-    return floor(num) == num;
+    return (double)((int)num) == num;
 }
 
 bool is_intf(float num)
 {
-    return floor(num) == num;
+    return (float)((int)num) == num;
 }
 
 // tested
@@ -76,7 +82,7 @@ bool is_intf(float num)
         printf(FMT(expr), (expr));         \
     }
 // ======================== Write to C code file End ========================
-
+#define BLOCK_END 85
 typedef struct
 {
     void (*report_error)();
@@ -130,24 +136,59 @@ typedef struct
 
 typedef struct
 {
+    int fd_read;
+    int fd_write;
+    char *input_file;
+    char *out_file;
+    /**
+     * 1. Read file line by line.
+     * 2. Write header to out_file.
+     * 3. Write to out_file line by line.
+     * 4. Write footer to out_file.
+     */
 } FileHandler;
 
-int check_args(int argc, char **arv)
+int check_args(int argc, char **argv)
 {
-    if (argc != 2)
+    if (argc < 2)
     {
-        LOGE("Usage: %s <filepath>\n", arv[0]);
+        LOGE("Usage: %s <filepath> <number1, [number2...]>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
+    g_argc = argc;
+    g_argv = argv;
     return 0;
 }
 
-int check_file(char *filepath)
+void clean()
+{
+    int ret = system("rm out*");
+    if (ret != 0)
+    {
+        LOGE("Clean failed with return code %d", ret);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void free_resources()
+{
+    if (ml_fp != NULL)
+    {
+        fclose(ml_fp);
+    }
+    if (outc_fp != NULL)
+    {
+        fclose(outc_fp);
+    }
+}
+
+int check_input_file(char *filepath)
 {
     int n = strlen(filepath);
     if (n < 4 || strcmp(filepath + n - 3, ".ml") != 0)
     {
         LOGE("File %s is not a valid .ml file", filepath);
+        exit(EXIT_FAILURE);
     }
     int fd = open(filepath, O_RDONLY);
     if (fd == -1)
@@ -223,7 +264,7 @@ void rm_comment(char *line)
     char *pos = strchr(line, comment);
     if (pos != NULL)
     {
-        LOGD("# found at %ld", pos - line);
+        LOGD("# found at row:%d, col:%ld", cur_ml_file_row, pos - line);
         line[pos - line] = '\0';
     }
 }
@@ -247,7 +288,7 @@ bool is_cmdline_arg(char *token, long *N)
     *N = strtol(token + 3, &badchar, 10);
     if (*badchar != '\0')
     {
-        LOGD("%s is not a valid number, %c", token, *badchar);
+        LOGD("%s is not a cmd line argument, %c", token, *badchar);
         return false;
     }
     return true;
@@ -264,7 +305,7 @@ bool is_cmdline_arg(char *token, long *N)
  * @return translated command line argument.
  * @param token: is a vali string end with '\0'
  */
-char *translate_cmdline_arg(int argc, char **argv, char *token)
+char *translate_cmdline_arg(char *token)
 {
     long N;
     if (!is_cmdline_arg(token, &N))
@@ -273,12 +314,20 @@ char *translate_cmdline_arg(int argc, char **argv, char *token)
         return token;
     }
     // out of boundary e.g. argc = 3, but arg2 is appear in code. this is an error.
-    if (N + 1 > argc - 1)
+    if (N + 1 > g_argc - 1)
     {
         LOGE("arg%ld is out of boundary", N);
-        return token;
+        exit(EXIT_FAILURE);
     }
-    return argv[N + 1];
+
+    char *badchar;
+    strtod(g_argv[N + 1], &badchar);
+    if (*badchar != '\0')
+    {
+        LOGE("argv[%ld + 1] is not a valid number, %s", N, g_argv[N + 1]);
+        exit(EXIT_FAILURE);
+    }
+    return g_argv[N + 1];
 }
 
 bool is_function_defined(char *function_name)
@@ -310,12 +359,142 @@ bool is_valid_function(Function *f)
     return true;
 }
 
+void write_block()
+{
+    FILE *fp = fopen("runml.c", "r");
+    if (fp == NULL)
+    {
+        LOGE("Cannot open runml.c, please don't move runml.c, place runml and runml.c in the same directory");
+        return;
+    }
+    char line[1024];
+    int cur_line = 1;
+    while (fgets(line, sizeof(line), fp) != NULL)
+    {
+        if (BLOCK_START < cur_line && cur_line < BLOCK_END)
+        {
+            fputs(line, outc_fp);
+        }
+        cur_line++;
+    }
+}
+
+void write_header()
+{
+    char *header =
+        "#include <stdio.h>\n"
+        "#include <stdbool.h>\n"
+        "#include <math.h>\n";
+    fputs(header, outc_fp);
+}
+
+void write_main_begin()
+{
+    char *main_begin = "int main(int argc, char **argv)\n{\n";
+    fputs(main_begin, outc_fp);
+}
+
+void write_main_end()
+{
+    char *main_end = "\treturn 0;\n}\n";
+    fputs(main_end, outc_fp);
+}
+
+/**
+ * convert line_read to line_write
+ */
+void parse_line(char *line_read, char *line_write)
+{
+    rm_comment(line_read);
+    // TODO
+    /**
+     * line start with a identifier, except "\t or whitespace" -> and "double" at beginning.
+     * line start with "function" keyword -> and "double" at beginning, replace " " with "(" "," and ")".
+     * line start with "return" keyword
+     * line start with "print" keyword
+     */
+    (void)line_write;
+}
+
+/**
+ * translate ml each line to viable c code.
+ */
+void write_content()
+{
+    char line_read[1024];
+    char line_write[1024];
+    while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
+    {
+        parse_line(line_read, line_write);
+        fputs(line_write, outc_fp);
+        cur_ml_file_row++;
+    }
+}
+
+void check_files()
+{
+    char *ml_filename = g_argv[1];
+    ml_fp = fopen(ml_filename, "r");
+    if (ml_fp == NULL)
+    {
+        LOGE("Cannot open %s", ml_filename);
+        free_resources();
+        exit(EXIT_FAILURE);
+    }
+    outc_fp = fopen(OUTPUT_FILE, "w");
+    if (outc_fp == NULL)
+    {
+        free_resources();
+        exit(EXIT_FAILURE);
+    }
+}
+
+void translate()
+{
+    check_files();
+    write_header();
+    write_block();
+    write_main_begin();
+    // write_content();
+    write_main_end();
+    free_resources();
+}
+
+void compile()
+{
+    int ret = system("cc -std=c11 -o " OUTPUT_EXECTUABLE " " OUTPUT_FILE);
+    if (ret != 0)
+    {
+        LOGE("Compile failed with return code %d", ret);
+#ifndef DEBUG_MODE
+        clean();
+#endif
+        exit(EXIT_FAILURE);
+    }
+}
+
+void execute()
+{
+    int ret = system(OUTPUT_EXECTUABLE);
+    if (ret != 0)
+    {
+        LOGE("Execute failed with return code %d", ret);
+#ifndef DEBUG_MODE
+        clean();
+#endif
+        exit(EXIT_FAILURE);
+    }
+}
+
 int main(int argc, char **argv)
 {
     check_args(argc, argv);
-    int fd = check_file(argv[1]);
-
-    close(fd);
+    translate();
+    compile();
+    execute();
+#ifndef DEBUG_MODE
+    clean();
+#endif
     LOGD("This is a debug message");
     LOGD("This is a debug message %d", 1);
     LOGD("This is a debug message %s", "test");
