@@ -52,3 +52,20 @@ function add a b
     return a * b
 print add(a, b) + arg0 - arg1
 # -------------------------------------------------
+
+
+print 10
+print add(10, 2)
+function add a b
+	print a
+	print b
+	return a + b
+
+print add(10, 2)
+
+function add a b
+	print a
+	print b
+	return a + b
+
+print add(10, 2)
