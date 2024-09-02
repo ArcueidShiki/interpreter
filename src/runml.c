@@ -30,19 +30,17 @@
 #define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
 #define MAX_IDENTIFIER_LENGTH 12
-#define OUTPUT_FILE "out.c"
-#define OUTPUT_EXECTUABLE "./out"
 
-uint16_t cur_ml_file_row = 0;
-uint16_t cur_ml_file_col = 0;
-char *g_indentifiers[MAX_UNIQUE_IDENTIFIER];
-int g_identifiers_count = 0;
 FILE *ml_fp;
 FILE *outc_fp;
+uint16_t cur_ml_file_row = 1;
+uint16_t cur_ml_file_col = 0;
 int g_argc;
 char **g_argv;
+char outc_filename[64];
+char outc_executable[64];
 
-#define BLOCK_START 45
+#define BLOCK_START 43
 // ======================== Write to C code file Start ========================
 bool is_intd(double num)
 {
@@ -82,71 +80,66 @@ bool is_intf(float num)
         printf(FMT(expr), (expr));         \
     }
 // ======================== Write to C code file End ========================
-#define BLOCK_END 85
-typedef struct
-{
-    void (*report_error)();
-} ErrorHandler;
+#define BLOCK_END 83
 
-typedef struct
+/**
+ * Read ml file twice
+ * First time handle function definition
+ * Second time handle Statement
+ */
+typedef enum
 {
-    /* Turns a sequence of characters(plain text) into a sequence of tokens */
-} Lexer;
-typedef struct
-{
-    /* Take a sequence of tokens and produces an abstract syntax tree(AST) */
-} Parser;
+    STATEMENT,           // one line, only statement could output to stdout
+    FUNCTION_DEFINITION, // function definition including its substatement.
+} PROGRAM_ITEM_TYPE;
 
-typedef struct
+typedef enum
 {
-    /* Translate code into c11 code. and write it to .c file */
-} Translator;
+    ASSIGNMENT,   // identifier <- expression => {double identifier = (double)expression;}
+    PRINT,        // print expression       => {PRINT(expression);}=
+    RETURN,       // return expression      => {return expression;}
+    FUNCTION_CALL // identifier "(" [ expression ("," expression) *]")" => just add `;` at the end.
+} STATEMENT_TYPE;
 
+typedef enum
+{
+    VARIABLE,
+    FUNCTION_NAME,
+    PARAMETER,
+} IDENTIFIER_TYPE; // or SYMBOL_TYPE
 typedef struct
 {
-    /* Compile the c file */
-} Compiler;
-typedef struct
-{
-    /* Execute compiled output */
-} Executor;
-
-typedef struct
-{
-    /* Remove tmp files */
-} Cleaner;
-
-typedef struct Variable
-{
-    /* Don't need to be defined, but need to be declared.*/
-} Variable;
+    IDENTIFIER_TYPE type;
+    int id;             // equals to its index in g_indentifiers
+    bool row_of_define; // record the definition row.
+    bool in_function;
+    bool is_defined; // when it goes out of function, should be set undefined.
+    bool is_valid;
+    char *name;
+} Identifier;
 typedef struct Statement
 {
-    char *expression;
+    STATEMENT_TYPE type;
+    bool is_valid;
+    bool in_function;       // is in function, start with tab or not.
+    char *orgin;            // original line
+    char *translated;       // translated line
+    int row_of_define;      // current row in ml file.
+    struct Statement *prev; // previous statement pointer,
+    struct Statement *next; // next statement pointer.
 } Statement;
-
 typedef struct
 {
-    char *funcname;
-    int num_of_statement;
-    char **statements;
-    Variable *variables;
-    Variable *parameters;
+    int row_of_define; // record the definition row.
+    int para_count;
+    int statement_count;
+    Identifier *funcname;
+    Identifier *parameters;
+    Statement *statements;
 } Function;
 
-typedef struct
-{
-    int fd_read;
-    int fd_write;
-    char *input_file;
-    char *out_file;
-    /**
-     * 1. Read file line by line.
-     * 2. Write header to out_file.
-     * 3. Write to out_file line by line.
-     * 4. Write footer to out_file.
-     */
-} FileHandler;
+Identifier g_indentifiers[MAX_UNIQUE_IDENTIFIER];
+int g_indentifiers_count = 0;
 
 int check_args(int argc, char **argv)
 {
@@ -170,7 +163,7 @@ void clean()
     }
 }
 
-void free_resources()
+void close_files()
 {
     if (ml_fp != NULL)
     {
@@ -180,24 +173,6 @@ void free_resources()
     {
         fclose(outc_fp);
     }
-}
-
-int check_input_file(char *filepath)
-{
-    int n = strlen(filepath);
-    if (n < 4 || strcmp(filepath + n - 3, ".ml") != 0)
-    {
-        LOGE("File %s is not a valid .ml file", filepath);
-        exit(EXIT_FAILURE);
-    }
-    int fd = open(filepath, O_RDONLY);
-    if (fd == -1)
-    {
-        LOGE("Cannot open %s, fd: %d\n", filepath, fd);
-        exit(EXIT_FAILURE);
-    }
-    LOGD("File %s opened successful, fd: %d", filepath, fd);
-    return fd;
 }
 
 bool is_valid_indentifier(char *identifier)
@@ -271,6 +246,8 @@ void rm_comment(char *line)
 
 /**
  * check if token is a command line argument.
+ * ./runml program.ml arg0, arg1, arg2, ... argN
+ * arg0 should be a valid number.
  * if it is, set the value to N.
  */
 bool is_cmdline_arg(char *token, long *N)
@@ -317,6 +294,7 @@ char *translate_cmdline_arg(char *token)
     if (N + 1 > g_argc - 1)
     {
         LOGE("arg%ld is out of boundary", N);
+        close_files();
         exit(EXIT_FAILURE);
     }
 
@@ -330,33 +308,29 @@ char *translate_cmdline_arg(char *token)
     return g_argv[N + 1];
 }
 
-bool is_function_defined(char *function_name)
+bool is_function_defined()
 {
     // TODO Lookup in global function symbol table from top-down.
-    (void)function_name; // disable warning
     return false;
 }
 
 bool is_valid_function(Function *f)
 {
-    if (!is_valid_indentifier(f->funcname))
+    if (!is_valid_indentifier(f->funcname->name))
     {
         return false;
-    }
-    if (!is_function_defined(f->funcname))
-    {
-        return false;
-    }
-    for (int i = 0; i < f->num_of_statement; i++)
-    {
-        if (!startwith_tab(f->statements[i]))
-        {
-            LOGE("Function %s statements not start with '\\t'", f->funcname);
-            return false;
-        }
     }
     // TODO
     return true;
+}
+
+void write_header()
+{
+    char *header =
+        "#include <stdio.h>\n"
+        "#include <stdbool.h>\n"
+        "#include <math.h>\n";
+    fputs(header, outc_fp);
 }
 
 void write_block()
@@ -375,17 +349,12 @@ void write_block()
         {
             fputs(line, outc_fp);
         }
+        if (cur_line > BLOCK_END)
+        {
+            break;
+        }
         cur_line++;
     }
-}
-
-void write_header()
-{
-    char *header =
-        "#include <stdio.h>\n"
-        "#include <stdbool.h>\n"
-        "#include <math.h>\n";
-    fputs(header, outc_fp);
 }
 
 void write_main_begin()
@@ -412,14 +381,12 @@ void parse_line(char *line_read, char *line_write)
      * line start with "function" keyword -> and "double" at beginning, replace " " with "(" "," and ")".
      * line start with "return" keyword
      * line start with "print" keyword
+     * use Link Node? g_symbol_table
      */
     (void)line_write;
 }
 
-/**
- * translate ml each line to viable c code.
- */
-void write_content()
+void write_ml_content()
 {
     char line_read[1024];
     char line_write[1024];
@@ -431,20 +398,34 @@ void write_content()
     }
 }
 
+/**
+ * translate ml each line to viable c code.
+ */
+void write_ml_call()
+{
+}
+
 void check_files()
 {
     char *ml_filename = g_argv[1];
+    int n = strlen(ml_filename);
+    if (n < 4 || strcmp(ml_filename + n - 3, ".ml") != 0)
+    {
+        LOGE("File %s is not a valid .ml file", ml_filename);
+        exit(EXIT_FAILURE);
+    }
     ml_fp = fopen(ml_filename, "r");
     if (ml_fp == NULL)
     {
         LOGE("Cannot open %s", ml_filename);
-        free_resources();
+        close_files();
         exit(EXIT_FAILURE);
     }
-    outc_fp = fopen(OUTPUT_FILE, "w");
+    snprintf(outc_filename, sizeof(outc_filename), "ml-%d.c", getpid());
+    outc_fp = fopen(outc_filename, "w");
     if (outc_fp == NULL)
     {
-        free_resources();
+        close_files();
         exit(EXIT_FAILURE);
     }
 }
@@ -454,15 +435,19 @@ void translate()
     check_files();
     write_header();
     write_block();
+    write_ml_content();
     write_main_begin();
-    // write_content();
+    write_ml_call();
     write_main_end();
-    free_resources();
+    close_files();
 }
 
 void compile()
 {
-    int ret = system("cc -std=c11 -o " OUTPUT_EXECTUABLE " " OUTPUT_FILE);
+    snprintf(outc_executable, sizeof(outc_executable), "./ml-%d", getpid());
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "cc -std=c11 -o %s %s", outc_executable, outc_filename);
+    int ret = system(cmd);
     if (ret != 0)
     {
         LOGE("Compile failed with return code %d", ret);
@@ -475,7 +460,7 @@ void compile()
 
 void execute()
 {
-    int ret = system(OUTPUT_EXECTUABLE);
+    int ret = system(outc_executable);
     if (ret != 0)
     {
         LOGE("Execute failed with return code %d", ret);
@@ -484,6 +469,11 @@ void execute()
 #endif
         exit(EXIT_FAILURE);
     }
+}
+
+int add(int a, int b)
+{
+    return a + b;
 }
 
 int main(int argc, char **argv)
@@ -495,24 +485,19 @@ int main(int argc, char **argv)
 #ifndef DEBUG_MODE
     clean();
 #endif
-    LOGD("This is a debug message");
-    LOGD("This is a debug message %d", 1);
-    LOGD("This is a debug message %s", "test");
-    char *statements[] = {"\t12312", "  abcasdad", "    12312asdas"};
-    Function f = {.statements = statements};
-    LOGD("Start with tab: %d", startwith_tab(f.statements[0]));
-    LOGD("Start with tab; %d", startwith_tab(f.statements[1]));
-    LOGD("Start with tab; %d", startwith_tab(f.statements[2]));
+
+#ifdef DEBUG_MODE
     LOGD("Start with tab; %d", startwith_tab(""));
     LOGD("Start with tab; %d", startwith_tab("\n"));
     LOGD("Start with tab; %d", startwith_tab("\t\t"));
-    (void)f;
     LOGD("5.0 == 5 ? %d", 5.0 == 5);
     PRINT(5.0);
     PRINT(5.5);
     PRINT(5);
-    PRINT(5.0 + 5.5);
+    PRINT(add(5, 5) * add(5, 3));
     PRINT(5.0 + 5.0);
     PRINT(5.0 + 5);
     PRINT(5.0 + 5.0);
+#endif
+    return 0;
 }
