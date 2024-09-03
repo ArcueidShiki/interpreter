@@ -3,7 +3,6 @@
  * Student1:    24323312    Jingtong Peng
  * Student2:    24364937    Lingyu Chen
  * Platform:    Linux (or MacOs)
- * Dev:         https://github.com/ArcueidShiki/interpreter
  */
 #include <string.h>
 #include <stdlib.h>
@@ -14,6 +13,15 @@
 #include <unistd.h>
 #include <ctype.h>
 
+FILE *ml_fp;
+FILE *outc_fp;
+uint16_t cur_ml_file_row = 1;
+uint16_t cur_ml_file_col = 0;
+int g_argc;
+char **g_argv;
+char outc_filename[64];
+char outc_executable[64];
+bool HAVE_ERRORS = false;
 #ifdef DEBUG_MODE
 #define DEBUG_START "@[DEBUG:line:%d]: {"
 #define DEBUG_END "}\n"
@@ -25,22 +33,13 @@
 #else
 #define LOGD(fmt, ...)
 #endif
-#define ERROR_START "![ERROR]: {"
+#define ERROR_START "![ERROR:line:%d]: {"
 #define ERROR_END "}\n"
-#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, ##__VA_ARGS__)
+#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, cur_ml_file_row, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
 #define MAX_IDENTIFIER_LENGTH 12
 
-FILE *ml_fp;
-FILE *outc_fp;
-uint16_t cur_ml_file_row = 1;
-uint16_t cur_ml_file_col = 0;
-int g_argc;
-char **g_argv;
-char outc_filename[64];
-char outc_executable[64];
-
-#define BLOCK_START 43
+#define UTILS_START 42
 // ======================== Write to C code file Start ========================
 bool is_intd(double num)
 {
@@ -80,13 +79,8 @@ bool is_intf(float num)
         printf(FMT(expr), (expr));         \
     }
 // ======================== Write to C code file End ========================
-#define BLOCK_END 83
+#define UTILS_END 82
 
-/**
- * Read ml file twice
- * First time handle function definition
- * Second time handle Statement
- */
 typedef enum
 {
     STATEMENT,           // one line, only statement could output to stdout
@@ -100,6 +94,15 @@ typedef enum
     RETURN,       // return expression      => {return expression;}
     FUNCTION_CALL // identifier "(" [ expression ("," expression) *]")" => just add `;` at the end.
 } STATEMENT_TYPE;
+
+typedef enum{
+    CONSTANT,
+    IDENTIFIER, // user defined
+    FUNCTION,   // user defined
+    EXPRESSION,
+    KEYWORD,
+    OPERATOR,
+} TOKEN_TYPE;
 
 typedef enum
 {
@@ -155,7 +158,9 @@ int check_args(int argc, char **argv)
 
 void clean()
 {
-    int ret = system("rm out*");
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm %s*", outc_executable);
+    int ret = system(cmd);
     if (ret != 0)
     {
         LOGE("Clean failed with return code %d", ret);
@@ -175,23 +180,33 @@ void close_files()
     }
 }
 
-bool is_valid_indentifier(char *identifier)
+void safe_exit()
 {
-    int n = strlen(identifier);
+    close_files();
+    exit(EXIT_FAILURE);
+}
+
+bool is_valid_identifier(Identifier *identifier)
+{
+    char *name = identifier->name;
+    int n = strlen(name);
     if (n > MAX_IDENTIFIER_LENGTH)
     {
         LOGE("Identifier %s is too long should be 1 to 12", identifier);
+        identifier->is_valid = false;
         return false;
     }
     for (int i = 0; i < n; i++)
     {
-        if (!isalpha(identifier[i] || !islower(identifier[i])))
+        if (!isalpha(name[i] || !islower(name[i])))
         {
             // Give current line and col
             LOGE("Identifier %s is not valid, it should be lowercase alphabetic characters", identifier);
+            identifier->is_valid = false;
             return false;
         }
     }
+    identifier->is_valid = true;
     return true;
 }
 
@@ -219,6 +234,16 @@ bool endwith_semicolon(char *line)
         return true;
     }
     return false;
+}
+
+bool operator_has_operands()
+{
+
+}
+
+bool check_bracket(char *line)
+{
+
 }
 
 bool is_valid_line(char *line)
@@ -316,7 +341,7 @@ bool is_function_defined()
 
 bool is_valid_function(Function *f)
 {
-    if (!is_valid_indentifier(f->funcname->name))
+    if (!is_valid_identifier(f->funcname->name))
     {
         return false;
     }
@@ -333,7 +358,7 @@ void write_header()
     fputs(header, outc_fp);
 }
 
-void write_block()
+void write_utils()
 {
     FILE *fp = fopen("runml.c", "r");
     if (fp == NULL)
@@ -345,11 +370,11 @@ void write_block()
     int cur_line = 1;
     while (fgets(line, sizeof(line), fp) != NULL)
     {
-        if (BLOCK_START < cur_line && cur_line < BLOCK_END)
+        if (UTILS_START < cur_line && cur_line < UTILS_END)
         {
             fputs(line, outc_fp);
         }
-        if (cur_line > BLOCK_END)
+        if (cur_line > UTILS_END)
         {
             break;
         }
@@ -357,25 +382,23 @@ void write_block()
     }
 }
 
-void write_main_begin()
+void write_main()
 {
-    char *main_begin = "int main(int argc, char **argv)\n{\n";
-    fputs(main_begin, outc_fp);
-}
-
-void write_main_end()
-{
-    char *main_end = "\treturn 0;\n}\n";
-    fputs(main_end, outc_fp);
+    char *main = "int main(int argc, char **argv)\n{\n\tml();\n\treturn 0;\n}";
+    fputs(main, outc_fp);
 }
 
 /**
- * convert line_read to line_write
+ * Parse each line: syntax analysis and error check:
+ * 1. Identify program-item type of each line.
+ * 2. [function body], start with "function", identifier should not same with keyword
+ * 3. [statement]
+ * cur_pos = ftell(outc_fp);
+ * fseek(outc_fp, cur_pos, cur_pos);
  */
-void parse_line(char *line_read, char *line_write)
+void parse_function_body(char *line_read, char *line_write)
 {
     rm_comment(line_read);
-    // TODO
     /**
      * line start with a identifier, except "\t or whitespace" -> and "double" at beginning.
      * line start with "function" keyword -> and "double" at beginning, replace " " with "(" "," and ")".
@@ -386,23 +409,68 @@ void parse_line(char *line_read, char *line_write)
     (void)line_write;
 }
 
-void write_ml_content()
+void parse_statements(char *line_read, char *line_write)
+{
+    rm_comment(line_read);
+    (void)line_write;
+}
+
+/**
+ * 1. Tokenize per line
+ * 2. First token must be "function" keyword.
+ * 3. Record line number of the start of the function body
+ * 4. The following tokens identifiers which should be valid identifier(is_valid_identifier). If not, LOGE, exit(EXIT_FAILURE)
+ * 5. Create a tmp Identifier, Check its validity, if not, LOGE, but not exit, only report error
+ * 5. Set flag function_body_begin
+ * 6. The following lines should check if a line start with a tab.
+ * 7. branch1: start with tab, then it is in function, and set its function identifier pointer(it contains of row of define).
+ *      7.1. Check if it is a valid statement(identifier.type ==  function && is defined, otherwise, set to 0),
+ *      7.2. if not, LOGE, but not exit, only report error, you should report all the error.
+ * 8. branch2: not start with tab, set flag {function_body_end}, skip this statement. until encounter the funtion defitino body.
+ *      General global statement will be processed in the second round of reading ml file.
+ * 9. only without error, then going to compilation steps, otherwise, exit(EXIT_FAILURE).
+ */
+void write_ml_functions()
 {
     char line_read[1024];
     char line_write[1024];
+    cur_ml_file_row = 0;
+    fseek(ml_fp, 0, SEEK_SET);
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
-        parse_line(line_read, line_write);
+        parse_function_body(line_read, line_write);
         fputs(line_write, outc_fp);
         cur_ml_file_row++;
     }
 }
 
 /**
- * translate ml each line to viable c code.
+ * Read each line
+ * 1. If line started with function. set flag, funtion start row and end row.
+ * 2. Then go to next statement line not start with tab.
+ * 3. Tokenize the statement, check identifier(variable, function, undefined), keyword, operator(* / + - ), constatnt(numbers) brackets(),
+ * 4. If token is illegal symbol other than above, like character is not alpha numberic/digit using strtod. report error,  but not exit.
+ * 5. If token is identifier, if it is a function call followed by brackets, check function is defined or not
+ * 6. If token is identifier, not a function call, check if it is defined, otherwise assigned it to 0.
+ * 7. If token is not identifier, check if it is a keyword (should followed by an expression), a valid number, a operator
+ * 8. Check brackets match pairs
+ * 9. Check operator has operands / expression on both sides. For example, operator can't appear on the first, after an operator, should be followed by something other than keyowrd and operator
+ * 10. Add semicolon at the end of the statement.
  */
-void write_ml_call()
+void write_ml_statements()
 {
+    rewind(ml_fp);
+    cur_ml_file_row = 0;
+    char line_read[1024];
+    char line_write[1024];
+    fputs("void ml()\n{\n", outc_fp);
+    while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
+    {
+        parse_statements(line_read, line_write);
+        fputs(line_write, outc_fp);
+        cur_ml_file_row++;
+    }
+    fputs("}\n", outc_fp);
 }
 
 void check_files()
@@ -434,11 +502,10 @@ void translate()
 {
     check_files();
     write_header();
-    write_block();
-    write_ml_content();
-    write_main_begin();
-    write_ml_call();
-    write_main_end();
+    write_utils();
+    write_ml_functions();
+    write_ml_statements();
+    write_main();
     close_files();
 }
 
@@ -471,15 +538,14 @@ void execute()
     }
 }
 
-int add(int a, int b)
-{
-    return a + b;
-}
-
 int main(int argc, char **argv)
 {
     check_args(argc, argv);
     translate();
+    if (HAVE_ERRORS)
+    {
+        safe_exit();
+    }
     compile();
     execute();
 #ifndef DEBUG_MODE
