@@ -15,13 +15,13 @@
 
 FILE *ml_fp;
 FILE *outc_fp;
-uint16_t cur_ml_file_row = 1;
-uint16_t cur_ml_file_col = 0;
+uint16_t CUR_ML_ROW = 1;
+uint16_t CUR_ML_COL = 0;
 int g_argc;
 char **g_argv;
 char outc_filename[64];
 char outc_executable[64];
-bool HAVE_ERRORS = false;
+bool TRANSLATE_PASS = true;
 #ifdef DEBUG_MODE
 #define DEBUG_START "@[DEBUG:line:%d]: {"
 #define DEBUG_END "}\n"
@@ -35,7 +35,7 @@ bool HAVE_ERRORS = false;
 #endif
 #define ERROR_START "![ERROR:line:%d]: {"
 #define ERROR_END "}\n"
-#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, cur_ml_file_row, ##__VA_ARGS__)
+#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, CUR_ML_ROW, ##__VA_ARGS__)
 #define MAX_UNIQUE_IDENTIFIER 50
 #define MAX_IDENTIFIER_LENGTH 12
 
@@ -95,7 +95,8 @@ typedef enum
     FUNCTION_CALL // identifier "(" [ expression ("," expression) *]")" => just add `;` at the end.
 } STATEMENT_TYPE;
 
-typedef enum{
+typedef enum
+{
     CONSTANT,
     IDENTIFIER, // user defined
     FUNCTION,   // user defined
@@ -110,16 +111,27 @@ typedef enum
     FUNCTION_NAME,
     PARAMETER,
 } IDENTIFIER_TYPE; // or SYMBOL_TYPE
-typedef struct
+
+typedef struct Function
 {
-    IDENTIFIER_TYPE type;
-    int id;             // equals to its index in g_indentifiers
-    bool row_of_define; // record the definition row.
-    bool in_function;
-    bool is_defined; // when it goes out of function, should be set undefined.
-    bool is_valid;
+    int start; // start line of function definition
+    int end;   // end line of function definition
     char *name;
+    int num_of_paras;
+    struct Function *parent; // null means global function.
+} Function;
+
+typedef struct Identifier
+{
+    int id;            // for indexing.
+    int row_of_define; // record the definition row.
+    bool initialized;  // only for VARIABLE, false set value to 0.0
+    char *name;
+    struct Identifier *scope; // function(points to a FUNCTION_NAME identifer) || global(null)
+    IDENTIFIER_TYPE type;
 } Identifier;
+
+#if 0
 typedef struct Statement
 {
     STATEMENT_TYPE type;
@@ -130,16 +142,9 @@ typedef struct Statement
     int row_of_define;      // current row in ml file.
     struct Statement *prev; // previous statement pointer,
     struct Statement *next; // next statement pointer.
+    Identifier *scope;      // function(points to a FUNCTION_NAME identifer) or global(null)
 } Statement;
-typedef struct
-{
-    int row_of_define; // record the definition row.
-    int para_count;
-    int statement_count;
-    Identifier *funcname;
-    Identifier *parameters;
-    Statement *statements;
-} Function;
+#endif
 
 Identifier g_indentifiers[MAX_UNIQUE_IDENTIFIER];
 int g_indentifiers_count = 0;
@@ -173,40 +178,55 @@ void close_files()
     if (ml_fp != NULL)
     {
         fclose(ml_fp);
+        ml_fp = NULL;
     }
     if (outc_fp != NULL)
     {
         fclose(outc_fp);
+        outc_fp = NULL;
     }
 }
 
 void safe_exit()
 {
+    LOGE("An error occurred, exiting...");
     close_files();
     exit(EXIT_FAILURE);
 }
 
-bool is_valid_identifier(Identifier *identifier)
+void trim(char *str)
 {
-    char *name = identifier->name;
-    int n = strlen(name);
+    char *end;
+    // trim leading sapce
+    while (isspace((unsigned char)*str))
+        str++;
+    if (*str == 0)
+        return;
+    end = str + strlen(str) - 1;
+
+    // trim trailing space
+    while (end > str && isspace((unsigned char)*end))
+        end--;
+    *(end + 1) = '\0';
+}
+
+bool is_valid_identifier(char *token)
+{
+    trim(token);
+    int n = strlen(token);
     if (n > MAX_IDENTIFIER_LENGTH)
     {
-        LOGE("Identifier %s is too long should be 1 to 12", identifier);
-        identifier->is_valid = false;
+        LOGE("Identifier %s is too long should be 1 to 12", token);
         return false;
     }
     for (int i = 0; i < n; i++)
     {
-        if (!isalpha(name[i] || !islower(name[i])))
+        if (!isalpha(token[i]) || !islower(token[i]))
         {
-            // Give current line and col
-            LOGE("Identifier %s is not valid, it should be lowercase alphabetic characters", identifier);
-            identifier->is_valid = false;
+            LOGE("Identifier [%s] is not valid, it should be lowercase alphabetic characters", token);
             return false;
         }
     }
-    identifier->is_valid = true;
     return true;
 }
 
@@ -236,15 +256,15 @@ bool endwith_semicolon(char *line)
     return false;
 }
 
+#if 0
 bool operator_has_operands()
 {
-
 }
 
 bool check_bracket(char *line)
 {
-
 }
+#endif
 
 bool is_valid_line(char *line)
 {
@@ -264,7 +284,7 @@ void rm_comment(char *line)
     char *pos = strchr(line, comment);
     if (pos != NULL)
     {
-        LOGD("# found at row:%d, col:%ld", cur_ml_file_row, pos - line);
+        LOGD("# found at row:%d, col:%ld", CUR_ML_ROW, pos - line);
         line[pos - line] = '\0';
     }
 }
@@ -305,7 +325,7 @@ bool is_cmdline_arg(char *token, long *N)
  * argN -> argv[N + 1]  "numberN"
  * from arg1 should check if it is a valid number.
  * @return translated command line argument.
- * @param token: is a vali string end with '\0'
+ * @param token: is a valid string end with '\0'
  */
 char *translate_cmdline_arg(char *token)
 {
@@ -333,19 +353,21 @@ char *translate_cmdline_arg(char *token)
     return g_argv[N + 1];
 }
 
-bool is_function_defined()
+#if 0
+bool is_function_defined(char *token)
 {
     // TODO Lookup in global function symbol table from top-down.
+    // Identifer in g_indentifiers, type is FUNCTION_NAME
     return false;
 }
+#endif
 
 bool is_valid_function(Function *f)
 {
-    if (!is_valid_identifier(f->funcname->name))
+    if (!is_valid_identifier(f->name))
     {
         return false;
     }
-    // TODO
     return true;
 }
 
@@ -388,31 +410,271 @@ void write_main()
     fputs(main, outc_fp);
 }
 
-/**
- * Parse each line: syntax analysis and error check:
- * 1. Identify program-item type of each line.
- * 2. [function body], start with "function", identifier should not same with keyword
- * 3. [statement]
- * cur_pos = ftell(outc_fp);
- * fseek(outc_fp, cur_pos, cur_pos);
- */
-void parse_function_body(char *line_read, char *line_write)
+bool is_func_define_line(char line[])
 {
-    rm_comment(line_read);
-    /**
-     * line start with a identifier, except "\t or whitespace" -> and "double" at beginning.
-     * line start with "function" keyword -> and "double" at beginning, replace " " with "(" "," and ")".
-     * line start with "return" keyword
-     * line start with "print" keyword
-     * use Link Node? g_symbol_table
-     */
-    (void)line_write;
+    // function definition line, must can be tokenized with separator " ", otherwise it is not a valid function define.
+    char *first_token = strtok(line, " ");
+    if (first_token == NULL)
+    {
+        return false;
+    }
+    if (strcmp(first_token, "function") != 0)
+    {
+        return false;
+    }
+    return true;
 }
 
-void parse_statements(char *line_read, char *line_write)
+bool is_blank_line(char *line)
+{
+    int n = strlen(line);
+    if (n == 0)
+    {
+        return true;
+    }
+    if (line[0] == '\n')
+    {
+        return true;
+    }
+    for (int i = 0; i < n - 1; i++)
+    {
+        if (!isspace(line[i]) || line[i] != '\t')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_comment_line(char *line)
+{
+    int n = strlen(line);
+    if (n == 0)
+    {
+        return false;
+    }
+    if (line[0] == '#')
+    {
+        return true;
+    }
+    return false;
+}
+
+#if 0
+bool is_valid_constant(char *token)
+{
+}
+#endif
+
+bool is_operator(char c)
+{
+    return c == '+' || c == '-' || c == '*' || c == '/';
+}
+
+bool is_valid_expression(char *expr)
+{
+    int brackets = 0;
+    bool prev_is_operator = true;
+    for (const char *p = expr; *p != '\0'; p++)
+    {
+        if (isdigit(*p))
+        {
+            prev_is_operator = false;
+        }
+        else if (is_operator(*p))
+        {
+            if (prev_is_operator)
+            {
+                LOGE("Two operators near each other");
+                return false;
+            }
+            prev_is_operator = true;
+        }
+        else if (*p == '(')
+        {
+            brackets++;
+            prev_is_operator = true;
+        }
+        else if (*p == ')')
+        {
+            if (brackets == 0 || prev_is_operator)
+            {
+                LOGE("Invalid brackets");
+                return false;
+            }
+            brackets--;
+            prev_is_operator = false;
+        }
+    }
+    return true;
+}
+
+bool is_assignment_line(char line_read[])
+{
+    /**
+     * 1. only have one valid "<-",
+     * 2. left is alpha characters with zero or more whitespaces,
+     * 3. right is number or expression.
+     */
+    char line[1024];
+    strcpy(line, line_read);
+    LOGD("is_assignment_line Line: %s", line);
+    char *pos = strstr(line, "<-");
+    if (pos == NULL)
+    {
+        return false;
+    }
+    char *left = strtok(line, "<-");
+    if (left == NULL)
+    {
+        LOGE("Assignment line is missing left side");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    if (!is_valid_identifier(left))
+    {
+        LOGE("Assignment line left side is not a valid identifier");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    char *right = strtok(NULL, "<-");
+    if (right == NULL)
+    {
+        LOGE("Assignment line is missing right side");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    if (!is_valid_expression(right))
+    {
+        LOGE("Assignment line right side is not a valid expression");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    return true;
+}
+
+void transalte_assignment_line(char line_read[], char line_write[])
+{
+    char *left = strtok(line_read, "<-");
+    char *right = strtok(NULL, "<-");
+    snprintf(line_write, 1024, "double %s = %s;\n", left, right);
+}
+
+bool is_print_line(char *line)
+{
+    /**
+     * 1. only have one valid "print",
+     * 2. right with an expression.
+     */
+    char *pos = strstr(line, "print");
+    if (pos == NULL)
+    {
+        return false;
+    }
+    return true;
+}
+
+void translate_print_line(char *line_read, char *line_write)
+{
+    char *pos = strstr(line_read, "print");
+    snprintf(line_write, 1024, "PRINT(%s);\n", pos + 5);
+}
+
+bool is_return_line(char *line)
+{
+    /**
+     * 1. only have one valid "return",
+     * 2. right with an expression.
+     */
+    char *pos = strstr(line, "return");
+    if (pos == NULL)
+    {
+        return false;
+    }
+    return true;
+}
+
+void translate_return_line(char *line_read, char *line_write)
+{
+    strcpy(line_write, line_read);
+    strcat(line_write, ";\n");
+}
+
+void translate_function_call(char *line_read, char *line_write)
+{
+    strcpy(line_write, line_read);
+    strcat(line_write, ";\n");
+}
+
+bool process_func_define(char line_read[], char line_write[])
+{
+    bool success = true;
+    strcpy(line_write, "double ");
+    char *token;
+    token = strtok(line_read, " "); // function
+    token = strtok(NULL, " ");      // funcname
+    success &= is_valid_identifier(token);
+    Identifier funcname = {
+        .id = g_indentifiers_count++,
+        .name = token,
+        .row_of_define = CUR_ML_ROW,
+        .scope = NULL,
+        .type = FUNCTION_NAME,
+        .initialized = false,
+    };
+
+    g_indentifiers[funcname.id] = funcname;
+
+    if (token == NULL)
+    {
+        LOGE("Function name is missing");
+        return false;
+    }
+    strcat(line_write, token);
+    strcat(line_write, "(");
+    while (token != NULL) // para1 para2 ... paran
+    {
+        LOGD("Token: %s", token);
+        token = strtok(NULL, " ");
+        Identifier para = {
+            .id = g_indentifiers_count++,
+            .name = token,
+            .row_of_define = CUR_ML_ROW,
+            .scope = &g_indentifiers[funcname.id],
+            .type = PARAMETER,
+        };
+        g_indentifiers[para.id] = para;
+        strcat(line_write, token);
+        strcat(line_write, ",");
+    }
+    line_write[strlen(line_write) - 1] = ')';
+    strcat(line_write, "\n{");
+    return true;
+}
+
+void parse_statement(char *line_read, char *line_write)
 {
     rm_comment(line_read);
-    (void)line_write;
+    if (is_assignment_line(line_read))
+    {
+        transalte_assignment_line(line_read, line_write);
+        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+    }
+    else if (is_print_line(line_read))
+    {
+        translate_print_line(line_read, line_write);
+        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+    }
+    else if (is_return_line(line_read))
+    {
+        translate_return_line(line_read, line_write);
+        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+    }
+    else
+    {
+        translate_function_call(line_read, line_write);
+        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+    }
 }
 
 /**
@@ -429,18 +691,59 @@ void parse_statements(char *line_read, char *line_write)
  * 8. branch2: not start with tab, set flag {function_body_end}, skip this statement. until encounter the funtion defitino body.
  *      General global statement will be processed in the second round of reading ml file.
  * 9. only without error, then going to compilation steps, otherwise, exit(EXIT_FAILURE).
+ * 10. if tokens in expresion don't contain spaces.
+ * 11. default return double
+ * 12. notice is global variable already define, should use it in function body.
+ * 13. if variable is not defined, replace str with 0.0, you can only process from top down, global variable and function body. do at the same time.
+ * 14. if variable is not defined, doesn't appect the funciton call
  */
-void write_ml_functions()
+void write_ml_definitions()
 {
-    char line_read[1024];
-    char line_write[1024];
-    cur_ml_file_row = 0;
+    char line_read[1024] = {0};
+    char line_write[1024] = {0};
+    CUR_ML_ROW = 0;
     fseek(ml_fp, 0, SEEK_SET);
+    bool in_function = false;
+    // Function *cur;
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
-        parse_function_body(line_read, line_write);
-        fputs(line_write, outc_fp);
-        cur_ml_file_row++;
+        CUR_ML_ROW++;
+        if (is_blank_line(line_read) || is_comment_line(line_read))
+            continue;
+        rm_comment(line_read);
+        if (!startwith_tab(line_read))
+        {
+            if (is_assignment_line(line_read))
+            {
+                // process assignment line because function may use global variable.
+                transalte_assignment_line(line_read, line_write);
+                fputs(line_write, outc_fp);
+            }
+        }
+        // function funcname para1 para2 ... paran
+        else if (is_func_define_line(line_read))
+        {
+            in_function = true;
+            process_func_define(line_read, line_write);
+            fputs(line_write, outc_fp);
+        }
+        else if (in_function)
+        {
+            if (startwith_tab(line_read))
+            {
+                parse_statement(line_read, line_write);
+            }
+            else // end of function body.
+            {
+                strcpy(line_write, "};\n");
+                in_function = false;
+            }
+            fputs(line_write, outc_fp);
+        }
+        else // global statements, do nothing.
+        {
+            continue;
+        }
     }
 }
 
@@ -456,21 +759,36 @@ void write_ml_functions()
  * 8. Check brackets match pairs
  * 9. Check operator has operands / expression on both sides. For example, operator can't appear on the first, after an operator, should be followed by something other than keyowrd and operator
  * 10. Add semicolon at the end of the statement.
+ * 11. all the ml logic execute in ml() function, and called in main funciton of c file, therefore, we need read ml file twice.
  */
-void write_ml_statements()
+void write_ml_executions()
 {
     rewind(ml_fp);
-    cur_ml_file_row = 0;
-    char line_read[1024];
-    char line_write[1024];
+    CUR_ML_ROW = 0;
+    char line_read[1024] = {0};
+    char line_write[1024] = {0};
     fputs("void ml()\n{\n", outc_fp);
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
-        parse_statements(line_read, line_write);
-        fputs(line_write, outc_fp);
-        cur_ml_file_row++;
+        CUR_ML_ROW++;
+        if (is_blank_line(line_read) || is_comment_line(line_read))
+            continue;
+        if (!startwith_tab(line_read) && !is_assignment_line(line_read))
+        {
+            parse_statement(line_read, line_write);
+            fputs(line_write, outc_fp);
+        }
     }
+    LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
     fputs("}\n", outc_fp);
+}
+
+bool is_file_empty(FILE *fp)
+{
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    return size == 0;
 }
 
 void check_files()
@@ -486,15 +804,18 @@ void check_files()
     if (ml_fp == NULL)
     {
         LOGE("Cannot open %s", ml_filename);
-        close_files();
-        exit(EXIT_FAILURE);
+        safe_exit();
+    }
+    if (is_file_empty(ml_fp))
+    {
+        LOGE("File %s is empty", g_argv[1]);
+        safe_exit();
     }
     snprintf(outc_filename, sizeof(outc_filename), "ml-%d.c", getpid());
     outc_fp = fopen(outc_filename, "w");
     if (outc_fp == NULL)
     {
-        close_files();
-        exit(EXIT_FAILURE);
+        safe_exit();
     }
 }
 
@@ -503,10 +824,12 @@ void translate()
     check_files();
     write_header();
     write_utils();
-    write_ml_functions();
-    write_ml_statements();
+    write_ml_definitions();
+    write_ml_executions();
     write_main();
     close_files();
+    if (!TRANSLATE_PASS)
+        safe_exit();
 }
 
 void compile()
@@ -538,14 +861,15 @@ void execute()
     }
 }
 
+double add(double a, double b)
+{
+    return a + b;
+}
+
 int main(int argc, char **argv)
 {
     check_args(argc, argv);
     translate();
-    if (HAVE_ERRORS)
-    {
-        safe_exit();
-    }
     compile();
     execute();
 #ifndef DEBUG_MODE
