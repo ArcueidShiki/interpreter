@@ -33,7 +33,7 @@ int test()
         perror("getcwd() error");
         exit(EXIT_FAILURE);
     }
-    char *arg0 = "./runml_debug ";
+    char *arg0 = "./runml_release ";
     for (int i = 0; i < MAX_TESTCASES; i++)
     {
         const char *arg1 = testcases[i];

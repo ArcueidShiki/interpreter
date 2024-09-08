@@ -136,7 +136,7 @@ typedef struct Statement
 {
     STATEMENT_TYPE type;
     bool is_valid;
-    bool in_function;       // is in function, start with tab or not.
+    bool processing_func;       // is in function, start with tab or not.
     char *orgin;            // original line
     char *translated;       // translated line
     int row_of_define;      // current row in ml file.
@@ -194,25 +194,26 @@ void safe_exit()
     exit(EXIT_FAILURE);
 }
 
-void trim(char *str)
+char* trim(char *str)
 {
     char *end;
     // trim leading sapce
-    while (isspace((unsigned char)*str))
+    while (isspace((unsigned char)*str) || *str == '\t')
         str++;
     if (*str == 0)
-        return;
+        return str;
     end = str + strlen(str) - 1;
 
     // trim trailing space
-    while (end > str && isspace((unsigned char)*end))
+    while (end > str && (isspace((unsigned char)*end) || *end == '\t'))
         end--;
     *(end + 1) = '\0';
+    return str;
 }
 
 bool is_valid_identifier(char *token)
 {
-    trim(token);
+    token = trim(token);
     int n = strlen(token);
     if (n > MAX_IDENTIFIER_LENGTH)
     {
@@ -278,7 +279,7 @@ bool is_valid_line(char *line)
 /**
  * rm comment first, then process each line.
  */
-void rm_comment(char *line)
+void rm_commentnt_newline(char *line)
 {
     char comment = '#';
     char *pos = strchr(line, comment);
@@ -410,19 +411,17 @@ void write_main()
     fputs(main, outc_fp);
 }
 
-bool is_func_define_line(char line[])
+bool is_func_define_line(char line_read[])
 {
     // function definition line, must can be tokenized with separator " ", otherwise it is not a valid function define.
+    char line[1024];
+    strcpy(line, line_read);
     char *first_token = strtok(line, " ");
     if (first_token == NULL)
     {
         return false;
     }
-    if (strcmp(first_token, "function") != 0)
-    {
-        return false;
-    }
-    return true;
+    return strcmp(first_token, "function") == 0;
 }
 
 bool is_blank_line(char *line)
@@ -518,7 +517,9 @@ bool is_assignment_line(char line_read[])
      */
     char line[1024];
     strcpy(line, line_read);
-    LOGD("is_assignment_line Line: %s", line);
+    char *trimed = trim(line_read);
+    strcpy(line, trimed);
+    LOGD("After original line:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
     char *pos = strstr(line, "<-");
     if (pos == NULL)
     {
@@ -544,12 +545,14 @@ bool is_assignment_line(char line_read[])
         TRANSLATE_PASS = false;
         return false;
     }
+#if 0 // TODO
     if (!is_valid_expression(right))
     {
         LOGE("Assignment line right side is not a valid expression");
         TRANSLATE_PASS = false;
         return false;
     }
+#endif
     return true;
 }
 
@@ -560,18 +563,22 @@ void transalte_assignment_line(char line_read[], char line_write[])
     snprintf(line_write, 1024, "double %s = %s;\n", left, right);
 }
 
-bool is_print_line(char *line)
+bool is_print_line(char line_read[])
 {
     /**
      * 1. only have one valid "print",
      * 2. right with an expression.
      */
-    char *pos = strstr(line, "print");
-    if (pos == NULL)
+    char line[1024];
+    char *trimed = trim(line_read);
+    strcpy(line, trimed);
+    LOGD("After original line: %s, trim: %s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
+    char *token = strtok(line, " ");
+    if (token == NULL)
     {
         return false;
     }
-    return true;
+    return strcmp(token, "print") == 0;
 }
 
 void translate_print_line(char *line_read, char *line_write)
@@ -609,10 +616,13 @@ void translate_function_call(char *line_read, char *line_write)
 bool process_func_define(char line_read[], char line_write[])
 {
     bool success = true;
+    char line[1024];
+    strcpy(line, line_read);
+    LOGD("Process function define line: %s", line);
     strcpy(line_write, "double ");
     char *token;
-    token = strtok(line_read, " "); // function
-    token = strtok(NULL, " ");      // funcname
+    token = strtok(line, " "); // function
+    token = strtok(NULL, " "); // funcname
     success &= is_valid_identifier(token);
     Identifier funcname = {
         .id = g_indentifiers_count++,
@@ -644,37 +654,42 @@ bool process_func_define(char line_read[], char line_write[])
             .type = PARAMETER,
         };
         g_indentifiers[para.id] = para;
-        strcat(line_write, token);
-        strcat(line_write, ",");
+        if (token != NULL)
+        {
+            strcat(line_write, "double ");
+            strcat(line_write, token);
+            strcat(line_write, ", ");
+        }
     }
-    line_write[strlen(line_write) - 1] = ')';
-    strcat(line_write, "\n{");
+    // rm trailing ","
+    line_write[strlen(line_write) - 2] = '\0';
+    strcat(line_write, ")\n{\n");
     return true;
 }
 
 void parse_statement(char *line_read, char *line_write)
 {
-    rm_comment(line_read);
+    rm_commentnt_newline(line_read);
     if (is_assignment_line(line_read))
     {
         transalte_assignment_line(line_read, line_write);
-        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+        LOGD("ASSIGN Line:%s", line_write);
     }
     else if (is_print_line(line_read))
     {
         translate_print_line(line_read, line_write);
-        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+        LOGD("PRINT Line:%s", line_write);
     }
     else if (is_return_line(line_read))
     {
         translate_return_line(line_read, line_write);
-        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
+        LOGD("RETURN Line:%s", line_write);
     }
     else
     {
         translate_function_call(line_read, line_write);
-        LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
     }
+    LOGD("Write Line:%s", line_write);
 }
 
 /**
@@ -703,46 +718,50 @@ void write_ml_definitions()
     char line_write[1024] = {0};
     CUR_ML_ROW = 0;
     fseek(ml_fp, 0, SEEK_SET);
-    bool in_function = false;
+    bool processing_func = false;
     // Function *cur;
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
         CUR_ML_ROW++;
         if (is_blank_line(line_read) || is_comment_line(line_read))
             continue;
-        rm_comment(line_read);
+        rm_commentnt_newline(line_read);
         if (!startwith_tab(line_read))
         {
+            if (processing_func)
+            {
+                // end of function body
+                strcpy(line_write, "};\n");
+                fputs(line_write, outc_fp);
+                processing_func = false;
+            }
+            // if not dealing with function body.
             if (is_assignment_line(line_read))
             {
-                // process assignment line because function may use global variable.
+                // global variable definition
                 transalte_assignment_line(line_read, line_write);
                 fputs(line_write, outc_fp);
             }
+            else if (is_func_define_line(line_read))
+            {
+                processing_func = true;
+                process_func_define(line_read, line_write);
+                LOGD("Write Line:%s", line_write);
+                fputs(line_write, outc_fp);
+            } // else other global statements, do nothing.
         }
-        // function funcname para1 para2 ... paran
-        else if (is_func_define_line(line_read))
+        else
         {
-            in_function = true;
-            process_func_define(line_read, line_write);
-            fputs(line_write, outc_fp);
-        }
-        else if (in_function)
-        {
-            if (startwith_tab(line_read))
+            if (processing_func)
             {
                 parse_statement(line_read, line_write);
+                LOGD("Write Line:%s", line_write);
+                fputs(line_write, outc_fp);
             }
-            else // end of function body.
+            else
             {
-                strcpy(line_write, "};\n");
-                in_function = false;
+                LOGE("Program lines commence at the left-hand margin (no indentation).");
             }
-            fputs(line_write, outc_fp);
-        }
-        else // global statements, do nothing.
-        {
-            continue;
         }
     }
 }
@@ -773,7 +792,7 @@ void write_ml_executions()
         CUR_ML_ROW++;
         if (is_blank_line(line_read) || is_comment_line(line_read))
             continue;
-        if (!startwith_tab(line_read) && !is_assignment_line(line_read))
+        if (!startwith_tab(line_read) && !is_assignment_line(line_read) && !is_func_define_line(line_read))
         {
             parse_statement(line_read, line_write);
             fputs(line_write, outc_fp);
