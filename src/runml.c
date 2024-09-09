@@ -194,7 +194,7 @@ void safe_exit()
     exit(EXIT_FAILURE);
 }
 
-char* trim(char *str)
+char *trim(char *str)
 {
     char *end;
     // trim leading sapce
@@ -787,6 +787,7 @@ void write_ml_executions()
     char line_read[1024] = {0};
     char line_write[1024] = {0};
     fputs("void ml()\n{\n", outc_fp);
+    CUR_ML_ROW = 0;
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
         CUR_ML_ROW++;
