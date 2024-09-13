@@ -123,9 +123,9 @@ typedef struct Function
 
 typedef struct Identifier
 {
+    bool initialized;  // only for VARIABLE, false set value to 0.0
     int id;            // for indexing.
     int row_of_define; // record the definition row.
-    bool initialized;  // only for VARIABLE, false set value to 0.0
     char *name;
     struct Identifier *scope; // function(points to a FUNCTION_NAME identifer) || global(null)
     IDENTIFIER_TYPE type;
@@ -146,8 +146,8 @@ typedef struct Statement
 } Statement;
 #endif
 
-Identifier g_indentifiers[MAX_UNIQUE_IDENTIFIER];
-int g_indentifiers_count = 0;
+Identifier g_identifiers[MAX_UNIQUE_IDENTIFIER]; // global symbols table.
+int g_identifiers_count = 0;
 
 int check_args(int argc, char **argv)
 {
@@ -211,20 +211,44 @@ char *trim(char *str)
     return str;
 }
 
-bool is_valid_identifier(char *token)
+bool is_operator(char c)
 {
-    token = trim(token);
-    int n = strlen(token);
-    if (n > MAX_IDENTIFIER_LENGTH)
+    return c == '+' || c == '-' || c == '*' || c == '/';
+}
+
+int is_special_char(char c)
+{
+    return c == '(' || c == ')' || c == ',';
+}
+
+bool is_number(char *str)
+{
+    char *badchar;
+    strtod(str, &badchar);
+    return *badchar == '\0';
+}
+
+bool is_keyword(char *str)
+{
+    return strcmp(str, "return") == 0 || strcmp(str, "print") == 0 || strcmp(str, "function") == 0;
+}
+
+bool is_valid_name(char *name)
+{
+    int n = strlen(name);
+    if (n > MAX_IDENTIFIER_LENGTH || n <= 0)
     {
-        LOGE("Identifier %s is too long should be 1 to 12", token);
+        LOGE("Identifier %s should be 1 to 12 long", name);
+        TRANSLATE_PASS = false;
         return false;
     }
+    name = trim(name);
     for (int i = 0; i < n; i++)
     {
-        if (!isalpha(token[i]) || !islower(token[i]))
+        if (!('a' <= name[i] && name[i] <= 'z'))
         {
-            LOGE("Identifier [%s] is not valid, it should be lowercase alphabetic characters", token);
+            LOGE("Identifier [%s] is not valid, it should be lowercase alphabetic characters", name);
+            TRANSLATE_PASS = false;
             return false;
         }
     }
@@ -257,16 +281,6 @@ bool endwith_semicolon(char *line)
     return false;
 }
 
-#if 0
-bool operator_has_operands()
-{
-}
-
-bool check_bracket(char *line)
-{
-}
-#endif
-
 bool is_valid_line(char *line)
 {
     if (endwith_semicolon(line))
@@ -277,17 +291,52 @@ bool is_valid_line(char *line)
 }
 
 /**
- * rm comment first, then process each line.
+ * There will be at most 50 [unique] identifiers appearing in any program, precondition, they will assure.
+ * Which means identifier name could be reused in different scope.
  */
-void rm_commentnt_newline(char *line)
+Identifier *find(Identifier *i)
 {
-    char comment = '#';
-    char *pos = strchr(line, comment);
-    if (pos != NULL)
+    for (int j = 0; j < g_identifiers_count; j++)
     {
-        LOGD("# found at row:%d, col:%ld", CUR_ML_ROW, pos - line);
-        line[pos - line] = '\0';
+        if (strcmp(i->name, g_identifiers[j].name) == 0)
+        {
+            // already defined, return pointer, and check it's scope and type. initialized, scope later implement
+            return &g_identifiers[j];
+        }
     }
+    // not found, i is a new identifier.
+    return NULL;
+}
+
+bool is_valid_identifier(Identifier *i)
+{
+    if (g_identifiers_count >= MAX_UNIQUE_IDENTIFIER)
+    {
+        LOGE("Too many unique identifiers, should be less than %d", MAX_UNIQUE_IDENTIFIER);
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    if (is_valid_name(i->name))
+    {
+        LOGE("Identifier name is not a valid name");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    for (int j = 0; j < g_identifiers_count; j++)
+    {
+        Identifier *cur = &g_identifiers[j];
+        // same name
+        if (strcmp(i->name, cur->name) == 0)
+        {
+            if (cur->type == FUNCTION_NAME)
+            {
+                LOGE("Identifier %s is already defined", i->name);
+                TRANSLATE_PASS = false;
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /**
@@ -340,8 +389,7 @@ char *translate_cmdline_arg(char *token)
     if (N + 1 > g_argc - 1)
     {
         LOGE("arg%ld is out of boundary", N);
-        close_files();
-        exit(EXIT_FAILURE);
+        TRANSLATE_PASS = false;
     }
 
     char *badchar;
@@ -349,19 +397,158 @@ char *translate_cmdline_arg(char *token)
     if (*badchar != '\0')
     {
         LOGE("argv[%ld + 1] is not a valid number, %s", N, g_argv[N + 1]);
-        exit(EXIT_FAILURE);
+        TRANSLATE_PASS = false;
     }
     return g_argv[N + 1];
 }
 
-#if 0
-bool is_function_defined(char *token)
+/**
+ * Extract tokens from an expression
+ */
+void tokenize(const char *expr, char tokens[][64], int *token_count)
 {
-    // TODO Lookup in global function symbol table from top-down.
-    // Identifer in g_indentifiers, type is FUNCTION_NAME
-    return false;
+    int len = strlen(expr);
+    int i = 0;
+    *token_count = 0;
+    while (i < len)
+    {
+        if (isspace(expr[i]))
+        {
+            i++;
+            continue;
+        }
+
+        if (is_operator(expr[i]) || is_special_char(expr[i]))
+        {
+            tokens[*token_count][0] = expr[i];
+            tokens[(*token_count)++][1] = '\0';
+            i++;
+        }
+        else if (isalnum(expr[i]))
+        {
+            int start = i;
+            while (i < len && (isalnum(expr[i]) || expr[i] == '.'))
+            {
+                i++;
+            }
+            strncpy(tokens[*token_count], &expr[start], i - start);
+            tokens[(*token_count)++][i - start] = '\0';
+        }
+        else
+        {
+            LOGD("Unknown character %c", expr[i]);
+            i++;
+        }
+    }
 }
-#endif
+
+/**
+ * Expression syntax check.
+ * 1. brackets matches
+ * 2. if identifier( , must be defined function
+ * 3. if NULL( or operator(, OK
+ * 4. if ( operator, not valid
+ * 5. if ( identifier, it must be consume function's parameter count
+ * 6. if ( number, OK
+ * 7. if () OK
+ * 8. operator left, right must be identifier or number
+ * 9. if () OK
+ * 10. if number / identifier ) OK.
+ * 11. replace identifier with 0.0 if not defined.
+ * 12. replace identifier with arg[N] if it is a command line argument.
+ */
+bool is_valid_expr(char *expr)
+{
+    char tokens[MAX_UNIQUE_IDENTIFIER][64];
+    int token_count = 0;
+    int brackets = 0;
+    tokenize(expr, tokens, &token_count);
+    // token_count ranges from 0 to MAX_UNIQUE_IDENTIFIER
+    if (token_count == 0)
+    {
+        LOGE("Empty expression");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    for (int i = 0; i < token_count; i++)
+    {
+        if (strcmp(tokens[i], "(") == 0)
+        {
+            brackets++;
+        }
+        else if (strcmp(tokens[i], ")") == 0)
+        {
+            brackets--;
+            if (brackets < 0)
+            {
+                LOGE("Invalid brackets");
+                TRANSLATE_PASS = false;
+                return false;
+            }
+        }
+        else if (strcmp(tokens[i], ",") == 0)
+        {
+            if (i == 0 || i == token_count - 1 ||
+                !is_valid_name(tokens[i - 1]) || !is_valid_name(tokens[i + 1]))
+            {
+                LOGE("Syntax error, missing operand near %s", tokens[i]);
+                TRANSLATE_PASS = false;
+                return false;
+            }
+        }
+        else if (is_operator(tokens[i][0]))
+        {
+            if (i == 0 || i == token_count - 1 ||
+                is_operator(tokens[i - 1][0]) || is_operator(tokens[i + 1][0]))
+            {
+                LOGE("Syntax error, missing operand near %s", tokens[i]);
+                TRANSLATE_PASS = false;
+                return false;
+            }
+        }
+        else if (is_keyword(tokens[i]))
+        {
+            LOGE("Syntax error, keyword %s in exprssion is not allowed here", tokens[i]);
+            TRANSLATE_PASS = false;
+            return false;
+        }
+        else if (is_number(tokens[i]))
+        {
+        }
+        else if (is_valid_name(tokens[i]))
+        {
+            translate_cmdline_arg(tokens[i]);
+            Identifier *idn = find(tokens[i]);
+        }
+        else
+        {
+            LOGE("Syntax error, unknown token %s", tokens[i]);
+            TRANSLATE_PASS = false;
+            return false;
+        }
+    }
+    if (brackets != 0)
+    {
+        LOGE("Syntax error, Unmatched brackets (");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    LOGD("Valid expression: %s", expr);
+}
+
+/**
+ * rm comment first, then process each line.
+ */
+void rm_commentnt_newline(char *line)
+{
+    char comment = '#';
+    char *pos = strchr(line, comment);
+    if (pos != NULL)
+    {
+        LOGD("# found at row:%d, col:%ld", CUR_ML_ROW, pos - line);
+        line[pos - line] = '\0';
+    }
+}
 
 bool is_valid_function(Function *f)
 {
@@ -470,44 +657,6 @@ bool is_operator(char c)
     return c == '+' || c == '-' || c == '*' || c == '/';
 }
 
-bool is_valid_expression(char *expr)
-{
-    int brackets = 0;
-    bool prev_is_operator = true;
-    for (const char *p = expr; *p != '\0'; p++)
-    {
-        if (isdigit(*p))
-        {
-            prev_is_operator = false;
-        }
-        else if (is_operator(*p))
-        {
-            if (prev_is_operator)
-            {
-                LOGE("Two operators near each other");
-                return false;
-            }
-            prev_is_operator = true;
-        }
-        else if (*p == '(')
-        {
-            brackets++;
-            prev_is_operator = true;
-        }
-        else if (*p == ')')
-        {
-            if (brackets == 0 || prev_is_operator)
-            {
-                LOGE("Invalid brackets");
-                return false;
-            }
-            brackets--;
-            prev_is_operator = false;
-        }
-    }
-    return true;
-}
-
 bool is_assignment_line(char line_read[])
 {
     /**
@@ -545,14 +694,12 @@ bool is_assignment_line(char line_read[])
         TRANSLATE_PASS = false;
         return false;
     }
-#if 0 // TODO
-    if (!is_valid_expression(right))
+    if (!is_valid_expr(right))
     {
         LOGE("Assignment line right side is not a valid expression");
         TRANSLATE_PASS = false;
         return false;
     }
-#endif
     return true;
 }
 
@@ -625,7 +772,7 @@ bool process_func_define(char line_read[], char line_write[])
     token = strtok(NULL, " "); // funcname
     success &= is_valid_identifier(token);
     Identifier funcname = {
-        .id = g_indentifiers_count++,
+        .id = g_identifiers_count++,
         .name = token,
         .row_of_define = CUR_ML_ROW,
         .scope = NULL,
@@ -633,7 +780,7 @@ bool process_func_define(char line_read[], char line_write[])
         .initialized = false,
     };
 
-    g_indentifiers[funcname.id] = funcname;
+    g_identifiers[funcname.id] = funcname;
 
     if (token == NULL)
     {
@@ -647,13 +794,13 @@ bool process_func_define(char line_read[], char line_write[])
         LOGD("Token: %s", token);
         token = strtok(NULL, " ");
         Identifier para = {
-            .id = g_indentifiers_count++,
+            .id = g_identifiers_count++,
             .name = token,
             .row_of_define = CUR_ML_ROW,
-            .scope = &g_indentifiers[funcname.id],
+            .scope = &g_identifiers[funcname.id],
             .type = PARAMETER,
         };
-        g_indentifiers[para.id] = para;
+        g_identifiers[para.id] = para;
         if (token != NULL)
         {
             strcat(line_write, "double ");
@@ -908,6 +1055,8 @@ int main(int argc, char **argv)
     PRINT(5.0 + 5.0);
     PRINT(5.0 + 5);
     PRINT(5.0 + 5.0);
+    LOGD("5.23 is a number %d", is_number("5.23"));
+    LOGD("5.23 is a digit %d", isdigit("5.23"));
 #endif
     return 0;
 }
