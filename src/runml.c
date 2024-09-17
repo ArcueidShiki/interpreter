@@ -71,7 +71,7 @@ bool is_intf(float num)
 #else
 #define LOGD(fmt, ...)
 #endif // DEBUG_MODE
-#define ERROR_START "![ERROR:line:%d, ml:%d]: {"
+#define ERROR_START "![ERROR:line:%d,ml:%d]: {"
 #define ERROR_END "}\n"
 #define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, __LINE__, CUR_ML_ROW, ##__VA_ARGS__)
 #define MAX_SYMBOL_COUNT 50
@@ -312,44 +312,22 @@ char *translate_cmdline_arg(char *token)
 #endif
 
 // have errors with arguments
-char *replace(char *str, char *old, char *new)
+void replace(const char *str, const char *old, const char *new, char *result)
 {
-    char *result;
-    int i = 0;
-    int count = 0;
-    int lnew = strlen(new);
+    char *pos;
+    const char *cur = str;
+    char buf[1024];
     int lold = strlen(old);
-    for (i = 0; str[i] != '\0'; i++)
+    result[0] = 0;
+    while ((pos = strstr(cur, old)) != NULL)
     {
-        if (strstr(&str[i], old) == &str[i])
-        {
-            i += lold - 1;
-            count++;
-        }
+        strncpy(buf, cur, pos - cur);
+        buf[pos - cur] = 0;
+        strcat(result, buf);
+        strcat(result, new);
+        cur = pos + lold;
     }
-    result = (char *)malloc(i + count * (lnew - lold) + 1);
-    if (result == NULL)
-    {
-        LOGE("Memory allocation failed");
-        TRANSLATE_PASS = false;
-        return NULL;
-    }
-    i = 0;
-    while (*str)
-    {
-        if (strstr(str, old) == str)
-        {
-            strcpy(&result[i], new);
-            i += lnew;
-            str += lold;
-        }
-        else
-        {
-            result[i++] = *str;
-        }
-    }
-    result[i] = '\0';
-    return result;
+    strcat(result, cur);
 }
 
 /**
@@ -359,21 +337,30 @@ char *replace(char *str, char *old, char *new)
  * arg2 -> argv[3]      "number2"
  * argN -> argv[N + 1]  "numberN"
  */
-char *replace_cmdline_args(char *line)
+void replace_cmdline_args(const char *line, char *res)
 {
+    memset(res, 0, 1024);
+    const char *tmp = line;
     for (int i = 2; i < g_argc; i++)
     {
-        if (!is_number(g_argv[i]))
-        {
-            TRANSLATE_PASS = false;
-            LOGE("argv[%d] is not a valid number", i);
-            return line;
-        }
         char argN[64];
         snprintf(argN, sizeof(argN), "arg%d", i - 1);
-        line = replace(line, argN, g_argv[i]);
+        if (strstr(line, argN) == NULL)
+        {
+            continue;
+        }
+        if (!is_number(g_argv[i]))
+        {
+            LOGE("%s is not a valid number", argN);
+            TRANSLATE_PASS = false;
+            return;
+        }
+        memset(res, 0, 1024);
+        replace(tmp, argN, g_argv[i], res);
+        tmp = res;
     }
-    return line;
+    if (res[0] == 0)
+        strcpy(res, line);
 }
 
 /**
@@ -491,7 +478,6 @@ bool is_valid_expr(char *expr)
         }
         else if (is_valid_identifier_name(tokens[i]))
         {
-
         }
         else
         {
@@ -814,22 +800,24 @@ bool process_func_define(char line_read[], char line_write[])
 void parse_statement(char *line_read, char *line_write)
 {
     rm_comment(line_read);
-    line_read = replace_cmdline_args(line_read);
-    if (is_assignment_line(line_read))
+    char line[1024];
+    replace_cmdline_args(line_read, line);
+    LOGD("After replced cmdline args Parse statement: %s", line);
+    if (is_assignment_line(line))
     {
-        translate_assignment_line(line_read, line_write);
+        translate_assignment_line(line, line_write);
     }
-    else if (is_print_line(line_read))
+    else if (is_print_line(line))
     {
-        translate_print_line(line_read, line_write);
+        translate_print_line(line, line_write);
     }
-    else if (is_return_line(line_read))
+    else if (is_return_line(line))
     {
-        translate_return_line(line_read, line_write);
+        translate_return_line(line, line_write);
     }
     else
     {
-        other_statement(line_read, line_write);
+        other_statement(line, line_write);
     }
 }
 
