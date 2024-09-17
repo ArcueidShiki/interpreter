@@ -6,4 +6,4 @@ function increment value
 	print one - value
 	return value + one
 #
-print increment(3) + increment(4) + arg1
+print increment(3) + increment(4)
