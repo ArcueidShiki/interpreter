@@ -20,6 +20,36 @@ const char *testcases[] = {
     "../test/sample08.ml",
 };
 
+void test_debug()
+{
+    char *arg0 = "./runml_debug ";
+    for (int i = 0; i < MAX_TESTCASES; i++)
+    {
+        const char *arg1 = testcases[i];
+        printf("Test case: %s\n", arg1);
+        char command[1024];
+        memset(command, 0, sizeof(command));
+        strncat(command, arg0, strlen(arg0));
+        strncat(command, arg1, strlen(arg1));
+        assert(system(command) == 0);
+    }
+}
+
+void test_release()
+{
+    char *arg0 = "./runml_release ";
+    for (int i = 0; i < MAX_TESTCASES; i++)
+    {
+        const char *arg1 = testcases[i];
+        printf("Test case: %s\n", arg1);
+        char command[1024];
+        memset(command, 0, sizeof(command));
+        strncat(command, arg0, strlen(arg0));
+        strncat(command, arg1, strlen(arg1));
+        assert(system(command) == 0);
+    }
+}
+
 int test()
 {
     // current working directory
@@ -33,19 +63,8 @@ int test()
         perror("getcwd() error");
         exit(EXIT_FAILURE);
     }
-    char *arg0 = "./runml_release ";
-    for (int i = 0; i < MAX_TESTCASES; i++)
-    {
-        const char *arg1 = testcases[i];
-        printf("Test case: %s\n", arg1);
-        printf("Test case: %s\n", testcases[i]);
-        printf("Test case: %p\n", testcases[i]);
-        char command[1024];
-        memset(command, 0, sizeof(command));
-        strncat(command, arg0, strlen(arg0));
-        strncat(command, arg1, strlen(arg1));
-        assert(system(command) == 0);
-    }
+    test_debug();
+    test_release();
     printf("All test cases passed\n");
     return 0;
 }

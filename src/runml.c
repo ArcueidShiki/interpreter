@@ -30,17 +30,7 @@ bool TRANSLATE_PASS = true;
     {                                                                        \
         fprintf(stdout, DEBUG_START fmt DEBUG_END, __LINE__, ##__VA_ARGS__); \
     }
-#else
-#define LOGD(fmt, ...)
-#endif
-#define ERROR_START "![ERROR:line:%d]: {"
-#define ERROR_END "}\n"
-#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, CUR_ML_ROW, ##__VA_ARGS__)
-#define MAX_UNIQUE_IDENTIFIER 50
-#define MAX_IDENTIFIER_LENGTH 12
-
-#define UTILS_START 42
-// ======================== Write to C code file Start ========================
+// ======================== Write this utils to code file ========================
 bool is_intd(double num)
 {
     return (double)((int)num) == num;
@@ -51,7 +41,6 @@ bool is_intf(float num)
     return (float)((int)num) == num;
 }
 
-// tested
 #define ISINT(expr) _Generic((expr), \
     short: true,                     \
     int: true,                       \
@@ -78,8 +67,15 @@ bool is_intf(float num)
     {                                      \
         printf(FMT(expr), (expr));         \
     }
-// ======================== Write to C code file End ========================
-#define UTILS_END 82
+// ================================================================
+#else
+#define LOGD(fmt, ...)
+#endif // DEBUG_MODE
+#define ERROR_START "![ERROR:line:%d, ml:%d]: {"
+#define ERROR_END "}\n"
+#define LOGE(fmt, ...) fprintf(stderr, ERROR_START fmt ERROR_END, __LINE__, CUR_ML_ROW, ##__VA_ARGS__)
+#define MAX_SYMBOL_COUNT 50
+#define MAX_SYMBOL_LENGTH 12
 
 typedef enum
 {
@@ -131,23 +127,8 @@ typedef struct Identifier
     IDENTIFIER_TYPE type;
 } Identifier;
 
-#if 0
-typedef struct Statement
-{
-    STATEMENT_TYPE type;
-    bool is_valid;
-    bool processing_func;       // is in function, start with tab or not.
-    char *orgin;            // original line
-    char *translated;       // translated line
-    int row_of_define;      // current row in ml file.
-    struct Statement *prev; // previous statement pointer,
-    struct Statement *next; // next statement pointer.
-    Identifier *scope;      // function(points to a FUNCTION_NAME identifer) or global(null)
-} Statement;
-#endif
-
-Identifier g_identifiers[MAX_UNIQUE_IDENTIFIER]; // global symbols table.
-int g_identifiers_count = 0;
+Identifier g_symbols_table[MAX_SYMBOL_COUNT]; // global symbols table.
+int g_symbols_count = 0;
 
 int check_args(int argc, char **argv)
 {
@@ -233,26 +214,29 @@ bool is_keyword(char *str)
     return strcmp(str, "return") == 0 || strcmp(str, "print") == 0 || strcmp(str, "function") == 0;
 }
 
-bool is_valid_name(char *name)
+bool is_valid_identifier_name(char *name)
 {
+    name = trim(name);
     int n = strlen(name);
-    if (n > MAX_IDENTIFIER_LENGTH || n <= 0)
+    if (n > MAX_SYMBOL_LENGTH || n <= 0)
     {
         LOGE("Identifier %s should be 1 to 12 long", name);
         TRANSLATE_PASS = false;
         return false;
     }
-    name = trim(name);
     for (int i = 0; i < n; i++)
     {
         if (!('a' <= name[i] && name[i] <= 'z'))
         {
-            LOGE("Identifier [%s] is not valid, it should be lowercase alphabetic characters", name);
-            TRANSLATE_PASS = false;
             return false;
         }
     }
     return true;
+}
+
+bool is_operand(char *token)
+{
+    return is_number(token) || is_valid_identifier_name(token); // || function call.
 }
 
 bool startwith_tab(char *line)
@@ -265,114 +249,38 @@ bool startwith_tab(char *line)
     return false;
 }
 
-bool endwith_semicolon(char *line)
-{
-    int n = strlen(line);
-    if (n == 0)
-    {
-        return false;
-    }
-    if (line[n - 1] == ';')
-    {
-        // TODO get ml file line and col
-        LOGE("Line: %s is not valid with a terminating semicolon", line);
-        return true;
-    }
-    return false;
-}
-
-bool is_valid_line(char *line)
-{
-    if (endwith_semicolon(line))
-    {
-        return false;
-    }
-    return true;
-}
-
-/**
- * There will be at most 50 [unique] identifiers appearing in any program, precondition, they will assure.
- * Which means identifier name could be reused in different scope.
- */
-Identifier *find(Identifier *i)
-{
-    for (int j = 0; j < g_identifiers_count; j++)
-    {
-        if (strcmp(i->name, g_identifiers[j].name) == 0)
-        {
-            // already defined, return pointer, and check it's scope and type. initialized, scope later implement
-            return &g_identifiers[j];
-        }
-    }
-    // not found, i is a new identifier.
-    return NULL;
-}
-
-bool is_valid_identifier(Identifier *i)
-{
-    if (g_identifiers_count >= MAX_UNIQUE_IDENTIFIER)
-    {
-        LOGE("Too many unique identifiers, should be less than %d", MAX_UNIQUE_IDENTIFIER);
-        TRANSLATE_PASS = false;
-        return false;
-    }
-    if (is_valid_name(i->name))
-    {
-        LOGE("Identifier name is not a valid name");
-        TRANSLATE_PASS = false;
-        return false;
-    }
-    for (int j = 0; j < g_identifiers_count; j++)
-    {
-        Identifier *cur = &g_identifiers[j];
-        // same name
-        if (strcmp(i->name, cur->name) == 0)
-        {
-            if (cur->type == FUNCTION_NAME)
-            {
-                LOGE("Identifier %s is already defined", i->name);
-                TRANSLATE_PASS = false;
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 /**
  * check if token is a command line argument.
  * ./runml program.ml arg0, arg1, arg2, ... argN
  * arg0 should be a valid number.
  * if it is, set the value to N.
+ * @return N if it is a command line argument, otherwise -1.
  */
-bool is_cmdline_arg(char *token, long *N)
+int is_cmdline_arg(char *token)
 {
     int n = strlen(token);
     if (n < 4)
     {
-        return false;
+        return -1;
     }
     if (strncmp(token, "arg", 3) != 0)
     {
-        return false;
+        return -1;
     }
     char *badchar;
-    *N = strtol(token + 3, &badchar, 10);
+    int N = strtol(token + 3, &badchar, 10);
     if (*badchar != '\0')
     {
         LOGD("%s is not a cmd line argument, %c", token, *badchar);
-        return false;
+        return -1;
     }
-    return true;
+    return N;
 }
 
+#if 0
 /**
  * handle arg0, arg1 ... argN
- *      -> argv[0]      "runml"
- * arg0 -> argv[1]      "program.ml"
- * arg1 -> argv[2]      "number1"
- * arg2 -> argv[3]      "number2"
- * argN -> argv[N + 1]  "numberN"
+
  * from arg1 should check if it is a valid number.
  * @return translated command line argument.
  * @param token: is a valid string end with '\0'
@@ -380,7 +288,7 @@ bool is_cmdline_arg(char *token, long *N)
 char *translate_cmdline_arg(char *token)
 {
     long N;
-    if (!is_cmdline_arg(token, &N))
+    if ((N = is_cmdline_arg(token)) != -1)
     {
         // do nothing.
         return token;
@@ -401,6 +309,72 @@ char *translate_cmdline_arg(char *token)
     }
     return g_argv[N + 1];
 }
+#endif
+
+// have errors with arguments
+char *replace(char *str, char *old, char *new)
+{
+    char *result;
+    int i = 0;
+    int count = 0;
+    int lnew = strlen(new);
+    int lold = strlen(old);
+    for (i = 0; str[i] != '\0'; i++)
+    {
+        if (strstr(&str[i], old) == &str[i])
+        {
+            i += lold - 1;
+            count++;
+        }
+    }
+    result = (char *)malloc(i + count * (lnew - lold) + 1);
+    if (result == NULL)
+    {
+        LOGE("Memory allocation failed");
+        TRANSLATE_PASS = false;
+        return NULL;
+    }
+    i = 0;
+    while (*str)
+    {
+        if (strstr(str, old) == str)
+        {
+            strcpy(&result[i], new);
+            i += lnew;
+            str += lold;
+        }
+        else
+        {
+            result[i++] = *str;
+        }
+    }
+    result[i] = '\0';
+    return result;
+}
+
+/**
+ *      -> argv[0]      "runml"
+ * arg0 -> argv[1]      "program.ml"
+ * arg1 -> argv[2]      "number1"
+ * arg2 -> argv[3]      "number2"
+ * argN -> argv[N + 1]  "numberN"
+ */
+char *replace_cmdline_args(char *line)
+{
+    for (int i = 2; i < g_argc; i++)
+    {
+        if (!is_number(g_argv[i]))
+        {
+            TRANSLATE_PASS = false;
+            LOGE("argv[%d] is not a valid number", i);
+            return line;
+        }
+        char argN[64];
+        snprintf(argN, sizeof(argN), "arg%d", i - 1);
+        line = replace(line, argN, g_argv[i]);
+    }
+    return line;
+}
 
 /**
  * Extract tokens from an expression
@@ -417,7 +391,6 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
             i++;
             continue;
         }
-
         if (is_operator(expr[i]) || is_special_char(expr[i]))
         {
             tokens[*token_count][0] = expr[i];
@@ -436,7 +409,8 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
         }
         else
         {
-            LOGD("Unknown character %c", expr[i]);
+            LOGE("Unknown character %c", expr[i]);
+            TRANSLATE_PASS = false;
             i++;
         }
     }
@@ -459,11 +433,11 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
  */
 bool is_valid_expr(char *expr)
 {
-    char tokens[MAX_UNIQUE_IDENTIFIER][64];
+    LOGD("expression: %s", expr);
+    char tokens[MAX_SYMBOL_COUNT][64];
     int token_count = 0;
     int brackets = 0;
     tokenize(expr, tokens, &token_count);
-    // token_count ranges from 0 to MAX_UNIQUE_IDENTIFIER
     if (token_count == 0)
     {
         LOGE("Empty expression");
@@ -489,24 +463,23 @@ bool is_valid_expr(char *expr)
         else if (strcmp(tokens[i], ",") == 0)
         {
             if (i == 0 || i == token_count - 1 ||
-                !is_valid_name(tokens[i - 1]) || !is_valid_name(tokens[i + 1]))
+                !is_operand(tokens[i - 1]) || !is_operand(tokens[i + 1]))
             {
-                LOGE("Syntax error, missing operand near %s", tokens[i]);
+                LOGE("Syntax error, missing operand near [%s], %s %d %d %s %s", tokens[i], expr, i, token_count - 1, tokens[i - 1], tokens[i + 1]);
                 TRANSLATE_PASS = false;
                 return false;
             }
         }
         else if (is_operator(tokens[i][0]))
         {
-            if (i == 0 || i == token_count - 1 ||
-                is_operator(tokens[i - 1][0]) || is_operator(tokens[i + 1][0]))
+            if (i == 0 || i == token_count - 1)
             {
                 LOGE("Syntax error, missing operand near %s", tokens[i]);
                 TRANSLATE_PASS = false;
                 return false;
             }
         }
-        else if (is_keyword(tokens[i]))
+        else if (i != 0 && is_keyword(tokens[i]))
         {
             LOGE("Syntax error, keyword %s in exprssion is not allowed here", tokens[i]);
             TRANSLATE_PASS = false;
@@ -514,11 +487,11 @@ bool is_valid_expr(char *expr)
         }
         else if (is_number(tokens[i]))
         {
+            // do nothing
         }
-        else if (is_valid_name(tokens[i]))
+        else if (is_valid_identifier_name(tokens[i]))
         {
-            translate_cmdline_arg(tokens[i]);
-            Identifier *idn = find(tokens[i]);
+
         }
         else
         {
@@ -534,12 +507,13 @@ bool is_valid_expr(char *expr)
         return false;
     }
     LOGD("Valid expression: %s", expr);
+    return true;
 }
 
-/**
+/**tokens[i - 1]
  * rm comment first, then process each line.
  */
-void rm_commentnt_newline(char *line)
+void rm_comment(char *line)
 {
     char comment = '#';
     char *pos = strchr(line, comment);
@@ -550,51 +524,62 @@ void rm_commentnt_newline(char *line)
     }
 }
 
-bool is_valid_function(Function *f)
-{
-    if (!is_valid_identifier(f->name))
-    {
-        return false;
-    }
-    return true;
-}
-
 void write_header()
 {
-    char *header =
-        "#include <stdio.h>\n"
-        "#include <stdbool.h>\n"
-        "#include <math.h>\n";
+    char *header = "#include <stdio.h>\n"
+                   "#include <stdbool.h>\n"
+                   "#include <math.h>\n";
     fputs(header, outc_fp);
 }
 
 void write_utils()
 {
-    FILE *fp = fopen("runml.c", "r");
-    if (fp == NULL)
-    {
-        LOGE("Cannot open runml.c, please don't move runml.c, place runml and runml.c in the same directory");
-        return;
-    }
-    char line[1024];
-    int cur_line = 1;
-    while (fgets(line, sizeof(line), fp) != NULL)
-    {
-        if (UTILS_START < cur_line && cur_line < UTILS_END)
-        {
-            fputs(line, outc_fp);
-        }
-        if (cur_line > UTILS_END)
-        {
-            break;
-        }
-        cur_line++;
-    }
+    const char *utils = "bool is_intd(double num)\n"
+                        "{\n"
+                        "    return (double)((int)num) == num;\n"
+                        "}\n"
+                        "\n"
+                        "bool is_intf(float num)\n"
+                        "{\n"
+                        "    return (float)((int)num) == num;\n"
+                        "}\n"
+                        "\n"
+                        "#define ISINT(expr) _Generic((expr), \\\n"
+                        "    short: true,                     \\\n"
+                        "    int: true,                       \\\n"
+                        "    long: true,                      \\\n"
+                        "    long long: true,                 \\\n"
+                        "    float: is_intf(expr),            \\\n"
+                        "    double: is_intd(expr))\n"
+                        "\n"
+                        "#define FMT(expr) _Generic((expr), \\\n"
+                        "    short: \"%hd\\n\",                \\\n"
+                        "    int: \"%d\\n\",                   \\\n"
+                        "    long: \"%ld\\n\",                 \\\n"
+                        "    long long: \"%lld\\n\",           \\\n"
+                        "    float: \"%f\\n\",                 \\\n"
+                        "    double: \"%f\\n\")\n"
+                        "\n"
+                        "#define PRINT(expr)                        \\\n"
+                        "    if (ISINT(expr))                       \\\n"
+                        "    {                                      \\\n"
+                        "        long long res = (long long)(expr); \\\n"
+                        "        printf(FMT(res), res);             \\\n"
+                        "    }                                      \\\n"
+                        "    else                                   \\\n"
+                        "    {                                      \\\n"
+                        "        printf(FMT(expr), (expr));         \\\n"
+                        "    }\n";
+    fputs(utils, outc_fp);
 }
 
 void write_main()
 {
-    char *main = "int main(int argc, char **argv)\n{\n\tml();\n\treturn 0;\n}";
+    char *main = "int main(int argc, char **argv)\n"
+                 "{\n"
+                 "\tml();\n"
+                 "\treturn 0;\n"
+                 "}";
     fputs(main, outc_fp);
 }
 
@@ -646,17 +631,6 @@ bool is_comment_line(char *line)
     return false;
 }
 
-#if 0
-bool is_valid_constant(char *token)
-{
-}
-#endif
-
-bool is_operator(char c)
-{
-    return c == '+' || c == '-' || c == '*' || c == '/';
-}
-
 bool is_assignment_line(char line_read[])
 {
     /**
@@ -668,7 +642,7 @@ bool is_assignment_line(char line_read[])
     strcpy(line, line_read);
     char *trimed = trim(line_read);
     strcpy(line, trimed);
-    LOGD("After original line:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
+    LOGD("Origin:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
     char *pos = strstr(line, "<-");
     if (pos == NULL)
     {
@@ -681,7 +655,7 @@ bool is_assignment_line(char line_read[])
         TRANSLATE_PASS = false;
         return false;
     }
-    if (!is_valid_identifier(left))
+    if (!is_valid_identifier_name(left))
     {
         LOGE("Assignment line left side is not a valid identifier");
         TRANSLATE_PASS = false;
@@ -696,14 +670,14 @@ bool is_assignment_line(char line_read[])
     }
     if (!is_valid_expr(right))
     {
-        LOGE("Assignment line right side is not a valid expression");
+        LOGE("Assignment line [%s] side is not a valid expression", right);
         TRANSLATE_PASS = false;
         return false;
     }
     return true;
 }
 
-void transalte_assignment_line(char line_read[], char line_write[])
+void translate_assignment_line(char line_read[], char line_write[])
 {
     char *left = strtok(line_read, "<-");
     char *right = strtok(NULL, "<-");
@@ -719,29 +693,41 @@ bool is_print_line(char line_read[])
     char line[1024];
     char *trimed = trim(line_read);
     strcpy(line, trimed);
-    LOGD("After original line: %s, trim: %s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
+    LOGD("Origin:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
     char *token = strtok(line, " ");
-    if (token == NULL)
+    if (strcmp(token, "print") != 0)
     {
+        LOGD("Line: [%s] Token [%s] is not print", line, token);
         return false;
     }
-    return strcmp(token, "print") == 0;
+    return true;
 }
 
 void translate_print_line(char *line_read, char *line_write)
 {
     char *pos = strstr(line_read, "print");
-    snprintf(line_write, 1024, "PRINT(%s);\n", pos + 5);
+    if (!is_valid_expr(pos + 5))
+    {
+        return;
+    }
+    snprintf(line_write, 1024, "\tPRINT(%s);\n", pos + 5);
 }
 
-bool is_return_line(char *line)
+bool is_return_line(char *line_read)
 {
     /**
      * 1. only have one valid "return",
      * 2. right with an expression.
      */
-    char *pos = strstr(line, "return");
-    if (pos == NULL)
+    char line[1024];
+    char *trimed = trim(line_read);
+    strcpy(line, trimed);
+    char *token = strtok(line, " ");
+    if (token == NULL)
+    {
+        return false;
+    }
+    if (strcmp(token, "return") != 0)
     {
         return false;
     }
@@ -750,12 +736,23 @@ bool is_return_line(char *line)
 
 void translate_return_line(char *line_read, char *line_write)
 {
+    char *pos = strstr(line_read, "return");
+    if (!is_valid_expr(pos + 6))
+    {
+        return;
+    }
     strcpy(line_write, line_read);
     strcat(line_write, ";\n");
 }
 
-void translate_function_call(char *line_read, char *line_write)
+void other_statement(char *line_read, char *line_write)
 {
+    if (!is_valid_expr(line_read))
+    {
+        LOGE("Other statement [%s] is not a valid expression", line_read);
+        strcpy(line_write, "\n");
+        return;
+    }
     strcpy(line_write, line_read);
     strcat(line_write, ";\n");
 }
@@ -770,9 +767,9 @@ bool process_func_define(char line_read[], char line_write[])
     char *token;
     token = strtok(line, " "); // function
     token = strtok(NULL, " "); // funcname
-    success &= is_valid_identifier(token);
+    success &= is_valid_identifier_name(token);
     Identifier funcname = {
-        .id = g_identifiers_count++,
+        .id = g_symbols_count++,
         .name = token,
         .row_of_define = CUR_ML_ROW,
         .scope = NULL,
@@ -780,7 +777,7 @@ bool process_func_define(char line_read[], char line_write[])
         .initialized = false,
     };
 
-    g_identifiers[funcname.id] = funcname;
+    g_symbols_table[funcname.id] = funcname;
 
     if (token == NULL)
     {
@@ -794,13 +791,13 @@ bool process_func_define(char line_read[], char line_write[])
         LOGD("Token: %s", token);
         token = strtok(NULL, " ");
         Identifier para = {
-            .id = g_identifiers_count++,
+            .id = g_symbols_count++,
             .name = token,
             .row_of_define = CUR_ML_ROW,
-            .scope = &g_identifiers[funcname.id],
+            .scope = &g_symbols_table[funcname.id],
             .type = PARAMETER,
         };
-        g_identifiers[para.id] = para;
+        g_symbols_table[para.id] = para;
         if (token != NULL)
         {
             strcat(line_write, "double ");
@@ -816,34 +813,31 @@ bool process_func_define(char line_read[], char line_write[])
 
 void parse_statement(char *line_read, char *line_write)
 {
-    rm_commentnt_newline(line_read);
+    rm_comment(line_read);
+    line_read = replace_cmdline_args(line_read);
     if (is_assignment_line(line_read))
     {
-        transalte_assignment_line(line_read, line_write);
-        LOGD("ASSIGN Line:%s", line_write);
+        translate_assignment_line(line_read, line_write);
     }
     else if (is_print_line(line_read))
     {
         translate_print_line(line_read, line_write);
-        LOGD("PRINT Line:%s", line_write);
     }
     else if (is_return_line(line_read))
     {
         translate_return_line(line_read, line_write);
-        LOGD("RETURN Line:%s", line_write);
     }
     else
     {
-        translate_function_call(line_read, line_write);
+        other_statement(line_read, line_write);
     }
-    LOGD("Write Line:%s", line_write);
 }
 
 /**
  * 1. Tokenize per line
  * 2. First token must be "function" keyword.
  * 3. Record line number of the start of the function body
- * 4. The following tokens identifiers which should be valid identifier(is_valid_identifier). If not, LOGE, exit(EXIT_FAILURE)
+ * 4. The following tokens identifiers which should be valid identifier. If not, LOGE, exit(EXIT_FAILURE)
  * 5. Create a tmp Identifier, Check its validity, if not, LOGE, but not exit, only report error
  * 5. Set flag function_body_begin
  * 6. The following lines should check if a line start with a tab.
@@ -866,13 +860,14 @@ void write_ml_definitions()
     CUR_ML_ROW = 0;
     fseek(ml_fp, 0, SEEK_SET);
     bool processing_func = false;
-    // Function *cur;
     while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
     {
         CUR_ML_ROW++;
         if (is_blank_line(line_read) || is_comment_line(line_read))
+        {
             continue;
-        rm_commentnt_newline(line_read);
+        }
+        rm_comment(line_read);
         if (!startwith_tab(line_read))
         {
             if (processing_func)
@@ -886,7 +881,7 @@ void write_ml_definitions()
             if (is_assignment_line(line_read))
             {
                 // global variable definition
-                transalte_assignment_line(line_read, line_write);
+                translate_assignment_line(line_read, line_write);
                 fputs(line_write, outc_fp);
             }
             else if (is_func_define_line(line_read))
@@ -902,7 +897,10 @@ void write_ml_definitions()
             if (processing_func)
             {
                 parse_statement(line_read, line_write);
-                LOGD("Write Line:%s", line_write);
+                if (line_write[0] != '\0')
+                {
+                    LOGD("Write Line:%s", line_write);
+                }
                 fputs(line_write, outc_fp);
             }
             else
@@ -943,6 +941,10 @@ void write_ml_executions()
         if (!startwith_tab(line_read) && !is_assignment_line(line_read) && !is_func_define_line(line_read))
         {
             parse_statement(line_read, line_write);
+            if (line_write[0] != '\0')
+            {
+                LOGD("Write Line:%s", line_write);
+            }
             fputs(line_write, outc_fp);
         }
     }
@@ -1028,11 +1030,6 @@ void execute()
     }
 }
 
-double add(double a, double b)
-{
-    return a + b;
-}
-
 int main(int argc, char **argv)
 {
     check_args(argc, argv);
@@ -1041,22 +1038,6 @@ int main(int argc, char **argv)
     execute();
 #ifndef DEBUG_MODE
     clean();
-#endif
-
-#ifdef DEBUG_MODE
-    LOGD("Start with tab; %d", startwith_tab(""));
-    LOGD("Start with tab; %d", startwith_tab("\n"));
-    LOGD("Start with tab; %d", startwith_tab("\t\t"));
-    LOGD("5.0 == 5 ? %d", 5.0 == 5);
-    PRINT(5.0);
-    PRINT(5.5);
-    PRINT(5);
-    PRINT(add(5, 5) * add(5, 3));
-    PRINT(5.0 + 5.0);
-    PRINT(5.0 + 5);
-    PRINT(5.0 + 5.0);
-    LOGD("5.23 is a number %d", is_number("5.23"));
-    LOGD("5.23 is a digit %d", isdigit("5.23"));
 #endif
     return 0;
 }

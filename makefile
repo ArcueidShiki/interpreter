@@ -32,7 +32,6 @@ release: $(TARGETS_RELEASE)
 test: $(TARGETS_TEST)
 
 all: $(TARGETS_DEBUG) $(TARGETS_RELEASE) $(TARGETS_TEST)
-	cp src/runml.c out/runml.c
 
 clean:
 	rm -rf $(OUT_DIR)/*
