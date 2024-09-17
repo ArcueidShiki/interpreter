@@ -112,7 +112,7 @@ typedef struct Function
 {
     int start; // start line of function definition
     int end;   // end line of function definition
-    char *name;
+    char name[13];
     int num_of_paras;
     struct Function *parent; // null means global function.
 } Function;
@@ -123,12 +123,14 @@ typedef struct Identifier
     int id;            // for indexing.
     int row_of_define; // record the definition row.
     char *name;
-    struct Identifier *scope; // function(points to a FUNCTION_NAME identifer) || global(null)
+    struct Identifier *scope; // [start_row, end_row], if global, scope[0] = start_row, scope[1] = EOF
+    bool infunc;
     IDENTIFIER_TYPE type;
 } Identifier;
 
 Identifier g_symbols_table[MAX_SYMBOL_COUNT]; // global symbols table.
 int g_symbols_count = 0;
+#define GLOBAL NULL
 
 int check_args(int argc, char **argv)
 {
@@ -168,10 +170,23 @@ void close_files()
     }
 }
 
+void free_mem()
+{
+    for (int i = 0; i < g_symbols_count; i++)
+    {
+        if (g_symbols_table[i].name != NULL)
+        {
+            free(g_symbols_table[i].name);
+            g_symbols_table[i].name = NULL;
+        }
+    }
+}
+
 void safe_exit()
 {
     LOGE("An error occurred, exiting...");
     close_files();
+    free_mem();
     exit(EXIT_FAILURE);
 }
 
@@ -234,9 +249,27 @@ bool is_valid_identifier_name(char *name)
     return true;
 }
 
-bool is_operand(char *token)
+Identifier *find_identifier(char *name, IDENTIFIER_TYPE type)
 {
-    return is_number(token) || is_valid_identifier_name(token); // || function call.
+    if (name[0] == 0)
+    {
+        LOGD("Identifier name is NULL");
+        return NULL;
+    }
+    for (int i = 0; i < g_symbols_count; i++)
+    {
+        if (g_symbols_table[i].name == NULL)
+        {
+            LOGD("Symbol %d is NULL, count:%d", i, g_symbols_count);
+            continue;
+        }
+        if (g_symbols_table[i].type == type)
+        {
+            if (strcmp(name, g_symbols_table[i].name) == 0)
+                return &g_symbols_table[i];
+        }
+    }
+    return NULL;
 }
 
 bool startwith_tab(char *line)
@@ -249,69 +282,6 @@ bool startwith_tab(char *line)
     return false;
 }
 
-/**
- * check if token is a command line argument.
- * ./runml program.ml arg0, arg1, arg2, ... argN
- * arg0 should be a valid number.
- * if it is, set the value to N.
- * @return N if it is a command line argument, otherwise -1.
- */
-int is_cmdline_arg(char *token)
-{
-    int n = strlen(token);
-    if (n < 4)
-    {
-        return -1;
-    }
-    if (strncmp(token, "arg", 3) != 0)
-    {
-        return -1;
-    }
-    char *badchar;
-    int N = strtol(token + 3, &badchar, 10);
-    if (*badchar != '\0')
-    {
-        LOGD("%s is not a cmd line argument, %c", token, *badchar);
-        return -1;
-    }
-    return N;
-}
-
-#if 0
-/**
- * handle arg0, arg1 ... argN
-
- * from arg1 should check if it is a valid number.
- * @return translated command line argument.
- * @param token: is a valid string end with '\0'
- */
-char *translate_cmdline_arg(char *token)
-{
-    long N;
-    if ((N = is_cmdline_arg(token)) != -1)
-    {
-        // do nothing.
-        return token;
-    }
-    // out of boundary e.g. argc = 3, but arg2 is appear in code. this is an error.
-    if (N + 1 > g_argc - 1)
-    {
-        LOGE("arg%ld is out of boundary", N);
-        TRANSLATE_PASS = false;
-    }
-
-    char *badchar;
-    strtod(g_argv[N + 1], &badchar);
-    if (*badchar != '\0')
-    {
-        LOGE("argv[%ld + 1] is not a valid number, %s", N, g_argv[N + 1]);
-        TRANSLATE_PASS = false;
-    }
-    return g_argv[N + 1];
-}
-#endif
-
-// have errors with arguments
 void replace(const char *str, const char *old, const char *new, char *result)
 {
     char *pos;
@@ -449,8 +419,7 @@ bool is_valid_expr(char *expr)
         }
         else if (strcmp(tokens[i], ",") == 0)
         {
-            if (i == 0 || i == token_count - 1 ||
-                !is_operand(tokens[i - 1]) || !is_operand(tokens[i + 1]))
+            if (i == 0 || i == token_count - 1)
             {
                 LOGE("Syntax error, missing operand near [%s], %s %d %d %s %s", tokens[i], expr, i, token_count - 1, tokens[i - 1], tokens[i + 1]);
                 TRANSLATE_PASS = false;
@@ -466,7 +435,7 @@ bool is_valid_expr(char *expr)
                 return false;
             }
         }
-        else if (i != 0 && is_keyword(tokens[i]))
+        else if (is_keyword(tokens[i]))
         {
             LOGE("Syntax error, keyword %s in exprssion is not allowed here", tokens[i]);
             TRANSLATE_PASS = false;
@@ -474,10 +443,37 @@ bool is_valid_expr(char *expr)
         }
         else if (is_number(tokens[i]))
         {
-            // do nothing
+            LOGD("Constant Number: %s", tokens[i]);
         }
         else if (is_valid_identifier_name(tokens[i]))
         {
+            if (i != token_count - 1 && strcmp(tokens[i + 1], "(") == 0)
+            {
+                // is a function call
+                Identifier *func = find_identifier(tokens[i], FUNCTION_NAME);
+                if (func == NULL)
+                {
+                    LOGE("Syntax error, function [%s] is not defined", tokens[i]);
+                    TRANSLATE_PASS = false;
+                    return false;
+                }
+                // verify function all arguments number.
+                return true;
+            }
+            else
+            {
+                Identifier *para = find_identifier(tokens[i], PARAMETER);
+                if (para != NULL)
+                {
+                }
+                // is a variable or parameter in function.
+                Identifier *var = find_identifier(tokens[i], VARIABLE);
+                if (var == NULL)
+                {
+                    // replace(expr, tokens[i], "0.0", expr);
+                    LOGD("Variable %s is not defined", tokens[i]);
+                }
+            }
         }
         else
         {
@@ -496,9 +492,6 @@ bool is_valid_expr(char *expr)
     return true;
 }
 
-/**tokens[i - 1]
- * rm comment first, then process each line.
- */
 void rm_comment(char *line)
 {
     char comment = '#';
@@ -672,10 +665,6 @@ void translate_assignment_line(char line_read[], char line_write[])
 
 bool is_print_line(char line_read[])
 {
-    /**
-     * 1. only have one valid "print",
-     * 2. right with an expression.
-     */
     char line[1024];
     char *trimed = trim(line_read);
     strcpy(line, trimed);
@@ -701,10 +690,6 @@ void translate_print_line(char *line_read, char *line_write)
 
 bool is_return_line(char *line_read)
 {
-    /**
-     * 1. only have one valid "return",
-     * 2. right with an expression.
-     */
     char line[1024];
     char *trimed = trim(line_read);
     strcpy(line, trimed);
@@ -745,44 +730,53 @@ void other_statement(char *line_read, char *line_write)
 
 bool process_func_define(char line_read[], char line_write[])
 {
-    bool success = true;
     char line[1024];
     strcpy(line, line_read);
-    LOGD("Process function define line: %s", line);
     strcpy(line_write, "double ");
     char *token;
     token = strtok(line, " "); // function
     token = strtok(NULL, " "); // funcname
-    success &= is_valid_identifier_name(token);
+    if (token == NULL || token[0] == 0)
+    {
+        LOGE("Function name is missing");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    if (!is_valid_identifier_name(token))
+    {
+        LOGE("Function name %s is not a valid identifier", token);
+        TRANSLATE_PASS = false;
+        return false;
+    }
     Identifier funcname = {
         .id = g_symbols_count++,
-        .name = token,
+        .name = malloc(strlen(token) + 1),
         .row_of_define = CUR_ML_ROW,
         .scope = NULL,
         .type = FUNCTION_NAME,
         .initialized = false,
     };
-
+    strcpy(funcname.name, token);
     g_symbols_table[funcname.id] = funcname;
 
-    if (token == NULL)
-    {
-        LOGE("Function name is missing");
-        return false;
-    }
     strcat(line_write, token);
     strcat(line_write, "(");
     while (token != NULL) // para1 para2 ... paran
     {
         LOGD("Token: %s", token);
         token = strtok(NULL, " ");
+        if (token == NULL)
+        {
+            break;
+        }
         Identifier para = {
             .id = g_symbols_count++,
-            .name = token,
+            .name = malloc(strlen(token) + 1),
             .row_of_define = CUR_ML_ROW,
             .scope = &g_symbols_table[funcname.id],
             .type = PARAMETER,
         };
+        strcpy(para.name, token);
         g_symbols_table[para.id] = para;
         if (token != NULL)
         {
@@ -858,6 +852,7 @@ void write_ml_definitions()
         rm_comment(line_read);
         if (!startwith_tab(line_read))
         {
+            LOGD("Not start with tab Line: %s", line_read);
             if (processing_func)
             {
                 // end of function body
@@ -865,30 +860,25 @@ void write_ml_definitions()
                 fputs(line_write, outc_fp);
                 processing_func = false;
             }
-            // if not dealing with function body.
             if (is_assignment_line(line_read))
             {
-                // global variable definition
-                translate_assignment_line(line_read, line_write);
+                char line[1024];
+                replace_cmdline_args(line_read, line);
+                translate_assignment_line(line, line_write);
                 fputs(line_write, outc_fp);
             }
             else if (is_func_define_line(line_read))
             {
                 processing_func = true;
                 process_func_define(line_read, line_write);
-                LOGD("Write Line:%s", line_write);
                 fputs(line_write, outc_fp);
-            } // else other global statements, do nothing.
+            } // else other global statements, handle in write_ml_executions()
         }
         else
         {
             if (processing_func)
             {
                 parse_statement(line_read, line_write);
-                if (line_write[0] != '\0')
-                {
-                    LOGD("Write Line:%s", line_write);
-                }
                 fputs(line_write, outc_fp);
             }
             else
