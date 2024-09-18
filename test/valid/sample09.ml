@@ -1,2 +1,2 @@
 #
-print arg1 * arg2
+print arg0 * arg1
