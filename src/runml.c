@@ -79,43 +79,10 @@ bool is_intf(float num)
 
 typedef enum
 {
-    STATEMENT,           // one line, only statement could output to stdout
-    FUNCTION_DEFINITION, // function definition including its substatement.
-} PROGRAM_ITEM_TYPE;
-
-typedef enum
-{
-    ASSIGNMENT,   // identifier <- expression => {double identifier = (double)expression;}
-    PRINT,        // print expression       => {PRINT(expression);}=
-    RETURN,       // return expression      => {return expression;}
-    FUNCTION_CALL // identifier "(" [ expression ("," expression) *]")" => just add `;` at the end.
-} STATEMENT_TYPE;
-
-typedef enum
-{
-    CONSTANT,
-    IDENTIFIER, // user defined
-    FUNCTION,   // user defined
-    EXPRESSION,
-    KEYWORD,
-    OPERATOR,
-} TOKEN_TYPE;
-
-typedef enum
-{
     VARIABLE,
     FUNCTION_NAME,
     PARAMETER,
 } IDENTIFIER_TYPE; // or SYMBOL_TYPE
-
-typedef struct Function
-{
-    int start; // start line of function definition
-    int end;   // end line of function definition
-    char name[13];
-    int num_of_paras;
-    struct Function *parent; // null means global function.
-} Function;
 
 typedef struct Identifier
 {
@@ -123,8 +90,8 @@ typedef struct Identifier
     int id;            // for indexing.
     int row_of_define; // record the definition row.
     char *name;
-    bool infunc;
     int parent_id;
+    int num_of_paras;
     IDENTIFIER_TYPE type;
 } Identifier;
 
@@ -152,7 +119,6 @@ void clean()
     int ret = system(cmd);
     if (ret != 0)
     {
-        LOGE("Clean failed with return code %d", ret);
         exit(EXIT_FAILURE);
     }
 }
@@ -185,7 +151,6 @@ void free_mem()
 
 void safe_exit()
 {
-    LOGE("An error occurred, exiting...");
     close_files();
     free_mem();
     exit(EXIT_FAILURE);
@@ -230,6 +195,14 @@ bool is_keyword(char *str)
     return strcmp(str, "return") == 0 || strcmp(str, "print") == 0 || strcmp(str, "function") == 0;
 }
 
+/**
+ *      -> argv[0]      "runml"
+ *      -> argv[1]      "program.ml"
+ * arg0 -> argv[2]      "number1"
+ * arg1 -> argv[3]      "number2"
+ * arg2 -> argv[4]      "number3"
+ * argN -> argv[N + 2]  "numberN + 1"
+ */
 bool is_cmdline_arg(char *str)
 {
     if (strncmp(str, "arg", 3) != 0)
@@ -265,7 +238,6 @@ Identifier *find_identifier(char *name, IDENTIFIER_TYPE type)
 {
     if (name[0] == 0)
     {
-        LOGD("Identifier name is NULL");
         return NULL;
     }
     for (int i = 0; i < g_symbols_count; i++)
@@ -295,12 +267,12 @@ Identifier *find_identifier(char *name, IDENTIFIER_TYPE type)
 
 bool startwith_tab(char *line)
 {
-    int n = strlen(line);
-    if (n >= 1)
-    {
-        return line[0] == '\t';
-    }
-    return false;
+    return strlen(line) >= 1 && line[0] == '\t';
+}
+
+bool startwith_indentation(char *line)
+{
+    return strlen(line) >= 1 && line[0] == ' ';
 }
 
 void replace(const char *str, const char *old, const char *new, char *result)
@@ -319,39 +291,6 @@ void replace(const char *str, const char *old, const char *new, char *result)
         cur = pos + lold;
     }
     strcat(result, cur);
-}
-
-/**
- *      -> argv[0]      "runml"
- * arg0 -> argv[1]      "program.ml"
- * arg1 -> argv[2]      "number1"
- * arg2 -> argv[3]      "number2"
- * argN -> argv[N + 1]  "numberN"
- */
-void replace_cmdline_args(const char *line, char *res)
-{
-    memset(res, 0, 1024);
-    const char *tmp = line;
-    for (int i = 2; i < g_argc; i++)
-    {
-        char argN[64];
-        snprintf(argN, sizeof(argN), "arg%d", i - 1);
-        if (strstr(line, argN) == NULL)
-        {
-            continue;
-        }
-        if (!is_number(g_argv[i]))
-        {
-            LOGE("%s is not a valid number", argN);
-            TRANSLATE_PASS = false;
-            return;
-        }
-        memset(res, 0, 1024);
-        replace(tmp, argN, g_argv[i], res);
-        tmp = res;
-    }
-    if (res[0] == 0)
-        strcpy(res, line);
 }
 
 /**
@@ -387,7 +326,7 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
         }
         else
         {
-            LOGE("Unknown character %c", expr[i]);
+            // Unknown token
             TRANSLATE_PASS = false;
             i++;
         }
@@ -401,11 +340,13 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
  */
 bool parse_expr(char *expr, char *result)
 {
-    LOGD("expression: %s", expr);
     memset(result, 0, 512);
     char tokens[MAX_SYMBOL_COUNT][64];
     int token_count = 0;
     int brackets = 0;
+    int func_args_count = 0;
+    int common_count = 0;
+    int num_func_call = 0;
     tokenize(expr, tokens, &token_count);
     if (token_count == 0)
     {
@@ -416,10 +357,7 @@ bool parse_expr(char *expr, char *result)
     {
         if (strcmp(tokens[i], "(") == 0)
         {
-            // TODO verify
             strcat(result, tokens[i]);
-            LOGD("Result: [%s]", result);
-
             brackets++;
         }
         else if (strcmp(tokens[i], ")") == 0)
@@ -434,11 +372,11 @@ bool parse_expr(char *expr, char *result)
             else
             {
                 strcat(result, tokens[i]);
-                LOGD("Result: [%s]", result);
             }
         }
         else if (strcmp(tokens[i], ",") == 0)
         {
+            common_count++;
             if (i == 0 || i == token_count - 1)
             {
                 LOGE("Syntax error, missing operand near [%s], %s %d %d %s %s", tokens[i], expr, i, token_count - 1, tokens[i - 1], tokens[i + 1]);
@@ -448,7 +386,6 @@ bool parse_expr(char *expr, char *result)
             else
             {
                 strcat(result, tokens[i]);
-                LOGD("Result: [%s]", result);
             }
         }
         else if (is_operator(tokens[i][0]))
@@ -462,7 +399,6 @@ bool parse_expr(char *expr, char *result)
             else
             {
                 strcat(result, tokens[i]);
-                LOGD("Result: [%s]", result);
             }
         }
         else if (is_keyword(tokens[i]))
@@ -474,18 +410,17 @@ bool parse_expr(char *expr, char *result)
         else if (is_number(tokens[i]))
         {
             strcat(result, tokens[i]);
-            LOGD("Constant Number: %s, res:[%s]", tokens[i], result);
         }
         else if (is_cmdline_arg(tokens[i]))
         {
             int N = atoi(tokens[i] + 3);
-            if (N < 1 && N >= g_argc - 1)
+            if (N < 0 || N >= g_argc - 2)
             {
                 LOGE("Invalid command line argument %s", tokens[i]);
                 TRANSLATE_PASS = false;
                 return false;
             }
-            strcat(result, g_argv[N + 1]);
+            strcat(result, g_argv[N + 2]);
         }
         else if (is_valid_identifier_name(tokens[i]))
         {
@@ -500,7 +435,8 @@ bool parse_expr(char *expr, char *result)
                     return false;
                 }
                 strcat(result, tokens[i]);
-                LOGD("Result: [%s]", result);
+                func_args_count += func->num_of_paras;
+                num_func_call++;
             }
             else
             {
@@ -508,12 +444,10 @@ bool parse_expr(char *expr, char *result)
                 if (para != NULL)
                 {
                     strcat(result, tokens[i]);
-                    LOGD("Result: [%s]", result);
                     continue;
                 }
                 Identifier *var = find_identifier(tokens[i], VARIABLE);
                 strcat(result, var == NULL ? "0 " : tokens[i]);
-                LOGD("Result: [%s]", result);
             }
         }
         else
@@ -526,6 +460,12 @@ bool parse_expr(char *expr, char *result)
     if (brackets != 0)
     {
         LOGE("Syntax error, Unmatched brackets (");
+        TRANSLATE_PASS = false;
+        return false;
+    }
+    if (common_count != func_args_count - num_func_call)
+    {
+        LOGE("Syntax error, function call arguments mismatch");
         TRANSLATE_PASS = false;
         return false;
     }
@@ -693,7 +633,6 @@ bool is_assignment_line(char read[])
         };
         strcpy(new_var.name, var);
         g_symbols_table[new_var.id] = new_var;
-        LOGD("New variable [%s] defined, id: [%d], parent: %d", new_var.name, new_var.id, new_var.parent_id);
     }
     char *expr = strtok(NULL, "<-");
     if (expr == NULL)
@@ -727,7 +666,6 @@ bool is_print_line(char read[])
     char *token = strtok(line, " ");
     if (strcmp(token, "print") != 0)
     {
-        LOGD("Line: [%s] Token [%s] is not print", line, token);
         return false;
     }
     return true;
@@ -779,7 +717,7 @@ void other_statement(char *read, char *write)
     char translated[512];
     if (!parse_expr(read, translated))
     {
-        LOGE("Other statement [%s] is not a valid expression", read);
+        LOGE("[%s] is not a valid expression", read);
         strcpy(write, "\n");
         TRANSLATE_PASS = false;
         return;
@@ -814,7 +752,7 @@ int process_func_define(char read[], char write[])
         .id = g_symbols_count++,
         .name = malloc(strlen(token) + 1),
         .row_of_define = CUR_ML_ROW,
-        .parent_id = MAIN,
+        .parent_id = g_func_id,
         .type = FUNCTION_NAME,
         .initialized = false,
     };
@@ -825,21 +763,28 @@ int process_func_define(char read[], char write[])
     strcat(write, "(");
     while (token != NULL) // para1 para2 ... paran
     {
-        LOGD("Token: %s", token);
         token = strtok(NULL, " ");
         if (token == NULL)
         {
             break;
         }
+        Identifier *parameter = find_identifier(token, PARAMETER);
+        if (parameter != NULL)
+        {
+            LOGE("Parameter %s is already defined", token);
+            TRANSLATE_PASS = false;
+            continue;
+        }
         Identifier para = {
             .id = g_symbols_count++,
             .name = malloc(strlen(token) + 1),
             .row_of_define = CUR_ML_ROW,
-            .parent_id = funcname.id,
+            .parent_id = g_func_id,
             .type = PARAMETER,
         };
         strcpy(para.name, token);
         g_symbols_table[para.id] = para;
+        g_symbols_table[funcname.id].num_of_paras++;
         if (token != NULL)
         {
             strcat(write, "double ");
@@ -909,7 +854,7 @@ void write_ml_definitions()
             continue;
         }
         rm_comment(read);
-        if (!startwith_tab(read))
+        if (!startwith_tab(read) && !startwith_indentation(read))
         {
             if (processing_func)
             {
@@ -920,6 +865,7 @@ void write_ml_definitions()
             }
             if (is_assignment_line(read))
             {
+                // global assignment line
                 translate_assignment_line(read, write);
                 fputs(write, outc_fp);
             }
@@ -939,7 +885,8 @@ void write_ml_definitions()
             }
             else
             {
-                LOGE("Program lines commence at the left-hand margin (no indentation).");
+                LOGE("Program lines should commence at the left-hand margin (without indentation).");
+                TRANSLATE_PASS = false;
             }
         }
     }
@@ -1040,7 +987,6 @@ void compile()
     int ret = system(cmd);
     if (ret != 0)
     {
-        LOGE("Compile failed with return code %d", ret);
 #ifndef DEBUG_MODE
         clean();
 #endif
@@ -1053,7 +999,6 @@ void execute()
     int ret = system(outc_executable);
     if (ret != 0)
     {
-        LOGE("Execute failed with return code %d", ret);
 #ifndef DEBUG_MODE
         clean();
 #endif
