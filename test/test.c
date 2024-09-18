@@ -10,14 +10,16 @@
 
 #define MAX_TESTCASES 8
 const char *testcases[] = {
-    "../test/sample01.ml",
-    "../test/sample02.ml",
-    "../test/sample03.ml",
-    "../test/sample04.ml",
-    "../test/sample05.ml",
-    "../test/sample06.ml",
-    "../test/sample07.ml",
-    "../test/sample08.ml",
+    "../test/valid/sample01.ml",
+    "../test/valid/sample02.ml",
+    "../test/valid/sample03.ml",
+    "../test/valid/sample04.ml",
+    "../test/valid/sample05.ml",
+    "../test/valid/sample06.ml",
+    "../test/valid/sample07.ml",
+    "../test/valid/sample08.ml 1312",
+    "../test/valid/sample09.ml",
+    "../test/valid/sample10.ml",
 };
 
 void test_debug()

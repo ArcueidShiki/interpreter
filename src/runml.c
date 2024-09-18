@@ -123,14 +123,15 @@ typedef struct Identifier
     int id;            // for indexing.
     int row_of_define; // record the definition row.
     char *name;
-    struct Identifier *scope; // [start_row, end_row], if global, scope[0] = start_row, scope[1] = EOF
     bool infunc;
+    int parent_id;
     IDENTIFIER_TYPE type;
 } Identifier;
 
 Identifier g_symbols_table[MAX_SYMBOL_COUNT]; // global symbols table.
 int g_symbols_count = 0;
-#define GLOBAL NULL
+#define MAIN -1
+int g_func_id = MAIN;
 
 int check_args(int argc, char **argv)
 {
@@ -229,6 +230,17 @@ bool is_keyword(char *str)
     return strcmp(str, "return") == 0 || strcmp(str, "print") == 0 || strcmp(str, "function") == 0;
 }
 
+bool is_cmdline_arg(char *str)
+{
+    if (strncmp(str, "arg", 3) != 0)
+    {
+        return false;
+    }
+    char *end;
+    strtol(str + 3, &end, 10);
+    return *end == '\0';
+}
+
 bool is_valid_identifier_name(char *name)
 {
     name = trim(name);
@@ -258,15 +270,24 @@ Identifier *find_identifier(char *name, IDENTIFIER_TYPE type)
     }
     for (int i = 0; i < g_symbols_count; i++)
     {
-        if (g_symbols_table[i].name == NULL)
+        Identifier symbol = g_symbols_table[i];
+        if (symbol.name == NULL)
         {
-            LOGD("Symbol %d is NULL, count:%d", i, g_symbols_count);
             continue;
         }
-        if (g_symbols_table[i].type == type)
+        if (symbol.type == type && strcmp(name, symbol.name) == 0)
         {
-            if (strcmp(name, g_symbols_table[i].name) == 0)
+            // same type and name
+            if (symbol.parent_id == MAIN && symbol.row_of_define <= CUR_ML_ROW)
+            {
+                // global variable
                 return &g_symbols_table[i];
+            }
+            if (symbol.parent_id == g_func_id && symbol.row_of_define <= CUR_ML_ROW)
+            {
+                // function local variable
+                return &g_symbols_table[i];
+            }
         }
     }
     return NULL;
@@ -374,30 +395,20 @@ void tokenize(const char *expr, char tokens[][64], int *token_count)
 }
 
 /**
- * Expression syntax check.
- * 1. brackets matches
- * 2. if identifier( , must be defined function
- * 3. if NULL( or operator(, OK
- * 4. if ( operator, not valid
- * 5. if ( identifier, it must be consume function's parameter count
- * 6. if ( number, OK
- * 7. if () OK
- * 8. operator left, right must be identifier or number
- * 9. if () OK
- * 10. if number / identifier ) OK.
- * 11. replace identifier with 0.0 if not defined.
- * 12. replace identifier with arg[N] if it is a command line argument.
+ * @return true if the expression is valid, otherwise false.
+ * @param expr: the expression to be parsed.
+ * @param result: translated expr.
  */
-bool is_valid_expr(char *expr)
+bool parse_expr(char *expr, char *result)
 {
     LOGD("expression: %s", expr);
+    memset(result, 0, 512);
     char tokens[MAX_SYMBOL_COUNT][64];
     int token_count = 0;
     int brackets = 0;
     tokenize(expr, tokens, &token_count);
     if (token_count == 0)
     {
-        LOGE("Empty expression");
         TRANSLATE_PASS = false;
         return false;
     }
@@ -405,6 +416,10 @@ bool is_valid_expr(char *expr)
     {
         if (strcmp(tokens[i], "(") == 0)
         {
+            // TODO verify
+            strcat(result, tokens[i]);
+            LOGD("Result: [%s]", result);
+
             brackets++;
         }
         else if (strcmp(tokens[i], ")") == 0)
@@ -416,6 +431,11 @@ bool is_valid_expr(char *expr)
                 TRANSLATE_PASS = false;
                 return false;
             }
+            else
+            {
+                strcat(result, tokens[i]);
+                LOGD("Result: [%s]", result);
+            }
         }
         else if (strcmp(tokens[i], ",") == 0)
         {
@@ -424,6 +444,11 @@ bool is_valid_expr(char *expr)
                 LOGE("Syntax error, missing operand near [%s], %s %d %d %s %s", tokens[i], expr, i, token_count - 1, tokens[i - 1], tokens[i + 1]);
                 TRANSLATE_PASS = false;
                 return false;
+            }
+            else
+            {
+                strcat(result, tokens[i]);
+                LOGD("Result: [%s]", result);
             }
         }
         else if (is_operator(tokens[i][0]))
@@ -434,6 +459,11 @@ bool is_valid_expr(char *expr)
                 TRANSLATE_PASS = false;
                 return false;
             }
+            else
+            {
+                strcat(result, tokens[i]);
+                LOGD("Result: [%s]", result);
+            }
         }
         else if (is_keyword(tokens[i]))
         {
@@ -443,7 +473,19 @@ bool is_valid_expr(char *expr)
         }
         else if (is_number(tokens[i]))
         {
-            LOGD("Constant Number: %s", tokens[i]);
+            strcat(result, tokens[i]);
+            LOGD("Constant Number: %s, res:[%s]", tokens[i], result);
+        }
+        else if (is_cmdline_arg(tokens[i]))
+        {
+            int N = atoi(tokens[i] + 3);
+            if (N < 1 && N >= g_argc - 1)
+            {
+                LOGE("Invalid command line argument %s", tokens[i]);
+                TRANSLATE_PASS = false;
+                return false;
+            }
+            strcat(result, g_argv[N + 1]);
         }
         else if (is_valid_identifier_name(tokens[i]))
         {
@@ -457,22 +499,21 @@ bool is_valid_expr(char *expr)
                     TRANSLATE_PASS = false;
                     return false;
                 }
-                // verify function all arguments number.
-                return true;
+                strcat(result, tokens[i]);
+                LOGD("Result: [%s]", result);
             }
             else
             {
                 Identifier *para = find_identifier(tokens[i], PARAMETER);
                 if (para != NULL)
                 {
+                    strcat(result, tokens[i]);
+                    LOGD("Result: [%s]", result);
+                    continue;
                 }
-                // is a variable or parameter in function.
                 Identifier *var = find_identifier(tokens[i], VARIABLE);
-                if (var == NULL)
-                {
-                    // replace(expr, tokens[i], "0.0", expr);
-                    LOGD("Variable %s is not defined", tokens[i]);
-                }
+                strcat(result, var == NULL ? "0 " : tokens[i]);
+                LOGD("Result: [%s]", result);
             }
         }
         else
@@ -488,7 +529,11 @@ bool is_valid_expr(char *expr)
         TRANSLATE_PASS = false;
         return false;
     }
-    LOGD("Valid expression: %s", expr);
+    if (result[0] == 0)
+    {
+        strcpy(result, expr);
+    }
+    LOGD("Valid expression: %s", result);
     return true;
 }
 
@@ -562,11 +607,11 @@ void write_main()
     fputs(main, outc_fp);
 }
 
-bool is_func_define_line(char line_read[])
+bool is_func_define_line(char read[])
 {
     // function definition line, must can be tokenized with separator " ", otherwise it is not a valid function define.
     char line[1024];
-    strcpy(line, line_read);
+    strcpy(line, read);
     char *first_token = strtok(line, " ");
     if (first_token == NULL)
     {
@@ -610,65 +655,75 @@ bool is_comment_line(char *line)
     return false;
 }
 
-bool is_assignment_line(char line_read[])
+bool is_assignment_line(char read[])
 {
-    /**
-     * 1. only have one valid "<-",
-     * 2. left is alpha characters with zero or more whitespaces,
-     * 3. right is number or expression.
-     */
     char line[1024];
-    strcpy(line, line_read);
-    char *trimed = trim(line_read);
+    strcpy(line, read);
+    char *trimed = trim(read);
     strcpy(line, trimed);
-    LOGD("Origin:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
     char *pos = strstr(line, "<-");
     if (pos == NULL)
     {
         return false;
     }
-    char *left = strtok(line, "<-");
-    if (left == NULL)
+    char *var = strtok(line, "<-");
+    if (var == NULL)
     {
         LOGE("Assignment line is missing left side");
         TRANSLATE_PASS = false;
         return false;
     }
-    if (!is_valid_identifier_name(left))
+    if (!is_valid_identifier_name(var))
     {
         LOGE("Assignment line left side is not a valid identifier");
         TRANSLATE_PASS = false;
         return false;
     }
-    char *right = strtok(NULL, "<-");
-    if (right == NULL)
+    Identifier *idn = find_identifier(var, VARIABLE);
+    if (idn == NULL)
+    {
+        // new variable identifier
+        Identifier new_var = {
+            .id = g_symbols_count++,
+            .name = malloc(strlen(var) + 1),
+            .row_of_define = CUR_ML_ROW,
+            .parent_id = g_func_id,
+            .type = VARIABLE,
+            .initialized = true,
+        };
+        strcpy(new_var.name, var);
+        g_symbols_table[new_var.id] = new_var;
+        LOGD("New variable [%s] defined, id: [%d], parent: %d", new_var.name, new_var.id, new_var.parent_id);
+    }
+    char *expr = strtok(NULL, "<-");
+    if (expr == NULL)
     {
         LOGE("Assignment line is missing right side");
-        TRANSLATE_PASS = false;
-        return false;
-    }
-    if (!is_valid_expr(right))
-    {
-        LOGE("Assignment line [%s] side is not a valid expression", right);
         TRANSLATE_PASS = false;
         return false;
     }
     return true;
 }
 
-void translate_assignment_line(char line_read[], char line_write[])
+void translate_assignment_line(char read[], char write[])
 {
-    char *left = strtok(line_read, "<-");
-    char *right = strtok(NULL, "<-");
-    snprintf(line_write, 1024, "double %s = %s;\n", left, right);
+    char *pos = strstr(read, "<-");
+    char translated[512];
+    if (!parse_expr(pos + strlen("<-"), translated))
+    {
+        TRANSLATE_PASS = false;
+        return;
+    }
+    char *left = strtok(read, "<-");
+    // char *right = strtok(NULL, "<-");
+    snprintf(write, 1024, "double %s = %s;\n", left, translated);
 }
 
-bool is_print_line(char line_read[])
+bool is_print_line(char read[])
 {
-    char line[1024];
-    char *trimed = trim(line_read);
+    char line[512];
+    char *trimed = trim(read);
     strcpy(line, trimed);
-    LOGD("Origin:%s, trim:%s, char:%c is tab:%d", line_read, line, line[0], line[0] == '\t');
     char *token = strtok(line, " ");
     if (strcmp(token, "print") != 0)
     {
@@ -678,20 +733,22 @@ bool is_print_line(char line_read[])
     return true;
 }
 
-void translate_print_line(char *line_read, char *line_write)
+void translate_print_line(char *read, char *write)
 {
-    char *pos = strstr(line_read, "print");
-    if (!is_valid_expr(pos + 5))
+    char *pos = strstr(read, "print");
+    char translated[512];
+    if (!parse_expr(pos + strlen("print"), translated))
     {
+        TRANSLATE_PASS = false;
         return;
     }
-    snprintf(line_write, 1024, "\tPRINT(%s);\n", pos + 5);
+    snprintf(write, 1024, "\tPRINT(%s);\n", translated);
 }
 
-bool is_return_line(char *line_read)
+bool is_return_line(char *read)
 {
     char line[1024];
-    char *trimed = trim(line_read);
+    char *trimed = trim(read);
     strcpy(line, trimed);
     char *token = strtok(line, " ");
     if (token == NULL)
@@ -705,34 +762,39 @@ bool is_return_line(char *line_read)
     return true;
 }
 
-void translate_return_line(char *line_read, char *line_write)
+void translate_return_line(char *read, char *write)
 {
-    char *pos = strstr(line_read, "return");
-    if (!is_valid_expr(pos + 6))
+    char *pos = strstr(read, "return");
+    char translated[512];
+    if (!parse_expr(pos + strlen("return"), translated))
     {
+        TRANSLATE_PASS = false;
         return;
     }
-    strcpy(line_write, line_read);
-    strcat(line_write, ";\n");
+    snprintf(write, 1024, "\treturn %s;\n", translated);
 }
 
-void other_statement(char *line_read, char *line_write)
+void other_statement(char *read, char *write)
 {
-    if (!is_valid_expr(line_read))
+    char translated[512];
+    if (!parse_expr(read, translated))
     {
-        LOGE("Other statement [%s] is not a valid expression", line_read);
-        strcpy(line_write, "\n");
+        LOGE("Other statement [%s] is not a valid expression", read);
+        strcpy(write, "\n");
+        TRANSLATE_PASS = false;
         return;
     }
-    strcpy(line_write, line_read);
-    strcat(line_write, ";\n");
+    snprintf(write, 1024, "%s;\n", translated);
 }
 
-bool process_func_define(char line_read[], char line_write[])
+/**
+ * @return funciton id
+ */
+int process_func_define(char read[], char write[])
 {
     char line[1024];
-    strcpy(line, line_read);
-    strcpy(line_write, "double ");
+    strcpy(line, read);
+    strcpy(write, "double ");
     char *token;
     token = strtok(line, " "); // function
     token = strtok(NULL, " "); // funcname
@@ -740,27 +802,27 @@ bool process_func_define(char line_read[], char line_write[])
     {
         LOGE("Function name is missing");
         TRANSLATE_PASS = false;
-        return false;
+        return MAIN;
     }
     if (!is_valid_identifier_name(token))
     {
         LOGE("Function name %s is not a valid identifier", token);
         TRANSLATE_PASS = false;
-        return false;
+        return MAIN;
     }
     Identifier funcname = {
         .id = g_symbols_count++,
         .name = malloc(strlen(token) + 1),
         .row_of_define = CUR_ML_ROW,
-        .scope = NULL,
+        .parent_id = MAIN,
         .type = FUNCTION_NAME,
         .initialized = false,
     };
     strcpy(funcname.name, token);
     g_symbols_table[funcname.id] = funcname;
 
-    strcat(line_write, token);
-    strcat(line_write, "(");
+    strcat(write, token);
+    strcat(write, "(");
     while (token != NULL) // para1 para2 ... paran
     {
         LOGD("Token: %s", token);
@@ -773,45 +835,42 @@ bool process_func_define(char line_read[], char line_write[])
             .id = g_symbols_count++,
             .name = malloc(strlen(token) + 1),
             .row_of_define = CUR_ML_ROW,
-            .scope = &g_symbols_table[funcname.id],
+            .parent_id = funcname.id,
             .type = PARAMETER,
         };
         strcpy(para.name, token);
         g_symbols_table[para.id] = para;
         if (token != NULL)
         {
-            strcat(line_write, "double ");
-            strcat(line_write, token);
-            strcat(line_write, ", ");
+            strcat(write, "double ");
+            strcat(write, token);
+            strcat(write, ", ");
         }
     }
     // rm trailing ","
-    line_write[strlen(line_write) - 2] = '\0';
-    strcat(line_write, ")\n{\n");
-    return true;
+    write[strlen(write) - 2] = '\0';
+    strcat(write, ")\n{\n");
+    return funcname.id;
 }
 
-void parse_statement(char *line_read, char *line_write)
+void parse_statement(char *read, char *write)
 {
-    rm_comment(line_read);
-    char line[1024];
-    replace_cmdline_args(line_read, line);
-    LOGD("After replced cmdline args Parse statement: %s", line);
-    if (is_assignment_line(line))
+    rm_comment(read);
+    if (is_assignment_line(read))
     {
-        translate_assignment_line(line, line_write);
+        translate_assignment_line(read, write);
     }
-    else if (is_print_line(line))
+    else if (is_print_line(read))
     {
-        translate_print_line(line, line_write);
+        translate_print_line(read, write);
     }
-    else if (is_return_line(line))
+    else if (is_return_line(read))
     {
-        translate_return_line(line, line_write);
+        translate_return_line(read, write);
     }
     else
     {
-        other_statement(line, line_write);
+        other_statement(read, write);
     }
 }
 
@@ -837,49 +896,46 @@ void parse_statement(char *line_read, char *line_write)
  */
 void write_ml_definitions()
 {
-    char line_read[1024] = {0};
-    char line_write[1024] = {0};
+    char read[1024] = {0};
+    char write[1024] = {0};
     CUR_ML_ROW = 0;
     fseek(ml_fp, 0, SEEK_SET);
     bool processing_func = false;
-    while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
+    while (fgets(read, sizeof(read), ml_fp) != NULL)
     {
         CUR_ML_ROW++;
-        if (is_blank_line(line_read) || is_comment_line(line_read))
+        if (is_blank_line(read) || is_comment_line(read))
         {
             continue;
         }
-        rm_comment(line_read);
-        if (!startwith_tab(line_read))
+        rm_comment(read);
+        if (!startwith_tab(read))
         {
-            LOGD("Not start with tab Line: %s", line_read);
             if (processing_func)
             {
                 // end of function body
-                strcpy(line_write, "};\n");
-                fputs(line_write, outc_fp);
+                strcpy(write, "};\n");
+                fputs(write, outc_fp);
                 processing_func = false;
             }
-            if (is_assignment_line(line_read))
+            if (is_assignment_line(read))
             {
-                char line[1024];
-                replace_cmdline_args(line_read, line);
-                translate_assignment_line(line, line_write);
-                fputs(line_write, outc_fp);
+                translate_assignment_line(read, write);
+                fputs(write, outc_fp);
             }
-            else if (is_func_define_line(line_read))
+            else if (is_func_define_line(read))
             {
                 processing_func = true;
-                process_func_define(line_read, line_write);
-                fputs(line_write, outc_fp);
+                g_func_id = process_func_define(read, write);
+                fputs(write, outc_fp);
             } // else other global statements, handle in write_ml_executions()
         }
         else
         {
             if (processing_func)
             {
-                parse_statement(line_read, line_write);
-                fputs(line_write, outc_fp);
+                parse_statement(read, write);
+                fputs(write, outc_fp);
             }
             else
             {
@@ -907,23 +963,20 @@ void write_ml_executions()
 {
     rewind(ml_fp);
     CUR_ML_ROW = 0;
-    char line_read[1024] = {0};
-    char line_write[1024] = {0};
+    char read[1024] = {0};
+    char write[1024] = {0};
     fputs("void ml()\n{\n", outc_fp);
     CUR_ML_ROW = 0;
-    while (fgets(line_read, sizeof(line_read), ml_fp) != NULL)
+    g_func_id = MAIN;
+    while (fgets(read, sizeof(read), ml_fp) != NULL)
     {
         CUR_ML_ROW++;
-        if (is_blank_line(line_read) || is_comment_line(line_read))
+        if (is_blank_line(read) || is_comment_line(read))
             continue;
-        if (!startwith_tab(line_read) && !is_assignment_line(line_read) && !is_func_define_line(line_read))
+        if (!startwith_tab(read) && !is_assignment_line(read) && !is_func_define_line(read))
         {
-            parse_statement(line_read, line_write);
-            if (line_write[0] != '\0')
-            {
-                LOGD("Write Line:%s", line_write);
-            }
-            fputs(line_write, outc_fp);
+            parse_statement(read, write);
+            fputs(write, outc_fp);
         }
     }
     LOGD("TRANSLATE_PASS: %d", TRANSLATE_PASS);
